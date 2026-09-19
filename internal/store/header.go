@@ -95,6 +95,106 @@ func headerSizeFor(pageSize int) (uint32, error) {
 // record array that starts past any plausible file.
 const maxHeaderSize = 1 << 20
 
+// Bounds on the header's own count fields. They exist so that every size
+// this package derives from a header field stays inside uint64 and
+// inside int, before any of it reaches a slice length. A ten-byte
+// hostile header must not be able to ask for a hundred-gigabyte
+// allocation.
+const (
+	maxRecordCount      = 1 << 40
+	maxBlockSizeRecords = 1 << 24
+	maxInt              = int(^uint(0) >> 1)
+)
+
+// Entry strides of the trailing regions.
+const (
+	// indexEntrySize is one int64 timestamp or one uint64 record index.
+	indexEntrySize = 8
+	// footerEntrySize is one block_start_index plus one crc32c.
+	footerEntrySize = 12
+)
+
+// blockCountFor returns the number of checksummed blocks a file with
+// recordCount records holds. The final block is short, never padded out
+// to blockSize.
+func blockCountFor(recordCount uint64, blockSize uint32) uint64 {
+	if blockSize == 0 {
+		return 0
+	}
+	return (recordCount + uint64(blockSize) - 1) / uint64(blockSize)
+}
+
+// setFinalized writes the finalized byte into an encoded header. It is
+// the last write of the finalization sequence, which runs in exactly
+// this order: the record array, the blob region, both indexes, the
+// footer, then the header with the byte clear, fsync, then this byte,
+// then fsync again. A reader rejects a file whose byte is clear, so a
+// writer that dies at any earlier point leaves a file nothing will read
+// rather than one whose header advertises an index that was never
+// written. See docs/format.md.
+func setFinalized(dst []byte) {
+	dst[hdrOffFinalized] = 1
+}
+
+// validateHeader reports whether h describes a coherent file of fileLen
+// bytes. It runs before any allocation sized from a header field.
+func validateHeader(h header, fileLen uint64) error {
+	if h.FormatVersion != formatVersion {
+		return ErrFormatVersion
+	}
+	if !h.Finalized {
+		return ErrNotFinalized
+	}
+	if h.HeaderSize < headerFieldsSize || h.HeaderSize > maxHeaderSize {
+		return ErrHeaderSize
+	}
+	if h.BlockSizeRecords == 0 || h.BlockSizeRecords > maxBlockSizeRecords {
+		return ErrBlockSize
+	}
+	if h.PriceScale <= 0 {
+		return ErrPriceScale
+	}
+	if h.RecordCount > maxRecordCount || h.RecordCount > uint64(maxInt) {
+		return ErrRecordCount
+	}
+
+	// Walk the region chain once, forwards. Each step checks that the
+	// region starts at or after the previous one ended, then that its own
+	// extent does not overflow. Addition is always written as a
+	// subtraction against the remaining headroom, never as a + b.
+	end := uint64(h.HeaderSize)
+	if h.RecordCount > (^uint64(0)-end)/RecordSize {
+		return ErrRecordCount
+	}
+	end += h.RecordCount * RecordSize
+
+	if h.BlobRegionOffset < end || h.BlobRegionLen > ^uint64(0)-h.BlobRegionOffset {
+		return ErrOffsetChain
+	}
+	end = h.BlobRegionOffset + h.BlobRegionLen
+
+	if h.TimeIndexOffset < end || h.TimeIndexCount > (^uint64(0)-h.TimeIndexOffset)/indexEntrySize {
+		return ErrOffsetChain
+	}
+	end = h.TimeIndexOffset + h.TimeIndexCount*indexEntrySize
+
+	if h.SnapshotIndexOffset < end || h.SnapshotIndexCount > (^uint64(0)-h.SnapshotIndexOffset)/indexEntrySize {
+		return ErrOffsetChain
+	}
+	end = h.SnapshotIndexOffset + h.SnapshotIndexCount*indexEntrySize
+
+	blocks := blockCountFor(h.RecordCount, h.BlockSizeRecords)
+	if h.FooterOffset < end || blocks > (^uint64(0)-h.FooterOffset)/footerEntrySize {
+		return ErrOffsetChain
+	}
+	end = h.FooterOffset + blocks*footerEntrySize
+
+	if end > fileLen {
+		return ErrOffsetChain
+	}
+	return nil
+}
+
 // encodeHeader writes h into the first headerFieldsSize bytes of dst and
 // panics if dst is shorter. It writes the checksum but leaves the
 // finalized byte clear: Close sets that byte on its own, after every

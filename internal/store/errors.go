@@ -18,4 +18,12 @@ var (
 	ErrBadMagic    = errors.New("store: not a replay hot-tier file")
 	ErrHeaderCRC   = errors.New("store: header checksum mismatch")
 	ErrPageSize    = errors.New("store: unusable page size")
+
+	ErrFormatVersion = errors.New("store: unsupported format version")
+	ErrNotFinalized  = errors.New("store: file is not finalized")
+	ErrHeaderSize    = errors.New("store: header_size out of range")
+	ErrBlockSize     = errors.New("store: block_size_records out of range")
+	ErrPriceScale    = errors.New("store: price_scale must be positive")
+	ErrRecordCount   = errors.New("store: record_count out of range")
+	ErrOffsetChain   = errors.New("store: file regions do not form a valid chain")
 )
