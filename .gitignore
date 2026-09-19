@@ -1,0 +1,7 @@
+CLAUDE-02-replay-engine.md
+plans/
+bench/results/
+testdata/large/
+*.prof
+*.pprof
+*.test
