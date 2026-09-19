@@ -31,4 +31,6 @@ import "golang.org/x/tools/go/analysis"
 // analyzer_test.go.
 var allAnalyzers = []*analysis.Analyzer{
 	NoTimeNow,
+	NoMultiSelect,
+	NoMapRangeOrdered,
 }

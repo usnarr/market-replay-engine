@@ -20,6 +20,8 @@ func TestAnalyzers(t *testing.T) {
 		pattern  string
 	}{
 		{"flags_time_now_family_outside_realclock", NoTimeNow, "notimenow/..."},
+		{"flags_more_than_one_comm_clause_in_hot_path", NoMultiSelect, "nomultiselect/..."},
+		{"flags_map_range_in_ordered_packages", NoMapRangeOrdered, "nomaprangeordered/..."},
 	}
 
 	for _, tt := range tests {
