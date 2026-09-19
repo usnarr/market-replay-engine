@@ -10,6 +10,10 @@ on:
 
 env:
   GO_VERSION: "1.23.4"
+  # honnef.co/go/tools@latest can require a newer Go than GO_VERSION
+  # pins (it has before: v0.7.0+ requires go1.26). Pin a version that
+  # declares go1.23 or older, and bump deliberately alongside GO_VERSION.
+  STATICCHECK_VERSION: "v0.6.1"
 
 jobs:
   lint:
@@ -20,7 +24,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+        run: go install honnef.co/go/tools/cmd/staticcheck@${{ env.STATICCHECK_VERSION }}
       - run: make lint
 
   test:
@@ -34,6 +38,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go test ./...
+      # cmd/lint-determinism is a separate module (see
+      # plans/01-repo-and-toolchain.md); ./... from the repo root does
+      # not cross into it.
+      - run: go test ./...
+        working-directory: cmd/lint-determinism
 
   # -race needs a working C toolchain on the runner. ubuntu-latest and
   # macos-latest images carry one; confirm the same is true for
@@ -49,6 +58,8 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go test -race ./...
+      - run: go test -race ./...
+        working-directory: cmd/lint-determinism
 
   determinism:
     strategy:

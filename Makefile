@@ -3,12 +3,14 @@
 
 .PHONY: test bench determinism profile lint fuzz
 
-# Full suite with -race. Covers internal/... and cmd/replayd.
-# cmd/convert and cmd/catalogue are separate modules; run their own
-# `go test ./...` from inside each directory, or extend this target
-# once those modules have code worth testing.
+# Full suite with -race. Covers internal/... and cmd/replayd, plus
+# cmd/lint-determinism (a separate module, run from inside its own
+# directory -- see plans/01-repo-and-toolchain.md). cmd/convert and
+# cmd/catalogue are separate modules too, still with no code worth
+# testing; extend this target once they have some.
 test:
 	go test -race ./...
+	cd cmd/lint-determinism && go test -race ./...
 
 # go test -bench -benchmem, never combined with -race: the race
 # detector's own instrumentation allocates and would fail the
@@ -32,11 +34,18 @@ profile:
 	mkdir -p profiles
 	go test -run=^$$ -bench=. -cpuprofile=profiles/cpu.prof -memprofile=profiles/mem.prof ./...
 
-# go vet, staticcheck, and the project's own determinism analyzer.
+# go vet, staticcheck, and the project's own determinism analyzer,
+# run over ./... from the repo root. cmd/lint-determinism is a
+# separate module (see plans/01-repo-and-toolchain.md), so it needs
+# its own go vet / staticcheck pass from inside its own directory --
+# not the determinism analyzer itself: its testdata/ fixtures contain
+# deliberate violations, so running the analyzer against its own
+# module would fail by design.
 lint:
 	go vet ./...
 	staticcheck ./...
 	go run ./cmd/lint-determinism ./...
+	cd cmd/lint-determinism && go vet ./... && staticcheck ./...
 
 # Fuzzes the binary record and header decoder. Short duration,
 # suitable for routine CI use; run a longer session periodically,
