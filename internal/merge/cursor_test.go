@@ -67,14 +67,14 @@ func openVenueFile(t *testing.T, path string) *store.Reader {
 	return r
 }
 
-func newCursorOver(t *testing.T, paths ...string) *Cursor {
+func newCursorOver(t *testing.T, venue uint16, paths ...string) *Cursor {
 	t.Helper()
 
 	readers := make([]*store.Reader, len(paths))
 	for i, path := range paths {
 		readers[i] = openVenueFile(t, path)
 	}
-	c, err := NewCursor(readers)
+	c, err := NewCursor(venue, readers)
 	if err != nil {
 		t.Fatalf("NewCursor() error = %v, want nil", err)
 	}
@@ -87,14 +87,14 @@ func drainCursor(t *testing.T, c *Cursor) ([]store.Record, error) {
 
 	var got []store.Record
 	for {
-		rec, ok, err := c.Next()
+		ev, ok, err := c.Next()
 		if err != nil {
 			return got, err
 		}
 		if !ok {
 			return got, nil
 		}
-		got = append(got, rec)
+		got = append(got, ev.Record)
 		if len(got) > 1<<20 {
 			t.Fatal("cursor is not draining")
 		}
@@ -104,7 +104,7 @@ func drainCursor(t *testing.T, c *Cursor) ([]store.Record, error) {
 func TestCursor(t *testing.T) {
 	t.Run("a_single_file_yields_every_record_in_order", func(t *testing.T) {
 		want := deltaRecords(3, 100, 0, 20)
-		c := newCursorOver(t, writeVenueFile(t, "day1.bin", 3, want))
+		c := newCursorOver(t, 3, writeVenueFile(t, "day1.bin", 3, want))
 
 		got, err := drainCursor(t, c)
 
@@ -119,7 +119,7 @@ func TestCursor(t *testing.T) {
 	t.Run("records_continue_across_a_file_boundary", func(t *testing.T) {
 		day1 := deltaRecords(3, 100, 0, 8)
 		day2 := deltaRecords(3, 200, 8, 8)
-		c := newCursorOver(t,
+		c := newCursorOver(t, 3,
 			writeVenueFile(t, "day1.bin", 3, day1),
 			writeVenueFile(t, "day2.bin", 3, day2))
 
@@ -138,7 +138,7 @@ func TestCursor(t *testing.T) {
 		// run of them. Only the full key has to increase.
 		day1 := []store.Record{deltaRecords(3, 100, 0, 1)[0]}
 		day2 := []store.Record{deltaRecords(3, 100, 1, 1)[0]}
-		c := newCursorOver(t,
+		c := newCursorOver(t, 3,
 			writeVenueFile(t, "day1.bin", 3, day1),
 			writeVenueFile(t, "day2.bin", 3, day2))
 
@@ -153,7 +153,7 @@ func TestCursor(t *testing.T) {
 	})
 
 	t.Run("an_empty_partition_yields_nothing", func(t *testing.T) {
-		c := newCursorOver(t)
+		c := newCursorOver(t, 3)
 
 		got, err := drainCursor(t, c)
 
@@ -168,7 +168,7 @@ func TestCursor(t *testing.T) {
 	t.Run("an_empty_file_between_two_full_ones_is_skipped", func(t *testing.T) {
 		day1 := deltaRecords(3, 100, 0, 4)
 		day3 := deltaRecords(3, 300, 4, 4)
-		c := newCursorOver(t,
+		c := newCursorOver(t, 3,
 			writeVenueFile(t, "day1.bin", 3, day1),
 			writeVenueFile(t, "day2.bin", 3, nil),
 			writeVenueFile(t, "day3.bin", 3, day3))
@@ -184,7 +184,7 @@ func TestCursor(t *testing.T) {
 	})
 
 	t.Run("a_partition_of_only_empty_files_yields_nothing", func(t *testing.T) {
-		c := newCursorOver(t,
+		c := newCursorOver(t, 3,
 			writeVenueFile(t, "day1.bin", 3, nil),
 			writeVenueFile(t, "day2.bin", 3, nil))
 
@@ -207,7 +207,7 @@ func TestCursor(t *testing.T) {
 		if r.BlockCount() < 3 {
 			t.Fatalf("fixture has %d blocks, want at least 3", r.BlockCount())
 		}
-		c, err := NewCursor([]*store.Reader{r})
+		c, err := NewCursor(3, []*store.Reader{r})
 		if err != nil {
 			t.Fatalf("NewCursor() error = %v, want nil", err)
 		}
@@ -223,7 +223,7 @@ func TestCursor(t *testing.T) {
 	})
 
 	t.Run("venue_id_reports_the_partitions_venue", func(t *testing.T) {
-		c := newCursorOver(t, writeVenueFile(t, "day1.bin", 42, deltaRecords(42, 100, 0, 2)))
+		c := newCursorOver(t, 42, writeVenueFile(t, "day1.bin", 42, deltaRecords(42, 100, 0, 2)))
 
 		if got := c.VenueID(); got != 42 {
 			t.Errorf("VenueID() = %d, want 42", got)
@@ -267,7 +267,7 @@ func TestCursorRejectsBrokenOrderingAcrossAFileBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			day2 := append([]store.Record{tt.first}, deltaRecords(3, 500, 500, 2)...)
-			c := newCursorOver(t,
+			c := newCursorOver(t, 3,
 				writeVenueFile(t, "day1.bin", 3, []store.Record{last}),
 				writeVenueFile(t, "day2.bin", 3, day2))
 
@@ -289,7 +289,7 @@ func TestCursorRejectsFilesFromDifferentVenues(t *testing.T) {
 		openVenueFile(t, writeVenueFile(t, "venue4.bin", 4, deltaRecords(4, 200, 0, 2))),
 	}
 
-	_, err := NewCursor(readers)
+	_, err := NewCursor(3, readers)
 
 	if !errors.Is(err, ErrVenueMismatch) {
 		t.Fatalf("NewCursor() error = %v, want %v", err, ErrVenueMismatch)
@@ -318,7 +318,7 @@ func TestCursorVerifiesABlockBeforeYieldingItsRecords(t *testing.T) {
 	}
 
 	t.Run("in_the_first_file", func(t *testing.T) {
-		c := newCursorOver(t, corruptVenueFile(t, "corrupt.bin", 0, 0, 50))
+		c := newCursorOver(t, 3, corruptVenueFile(t, "corrupt.bin", 0, 0, 50))
 
 		got, err := drainCursor(t, c)
 
@@ -335,7 +335,7 @@ func TestCursorVerifiesABlockBeforeYieldingItsRecords(t *testing.T) {
 		// Carrying the previous file's block number over would leave this
 		// file's first block unchecked.
 		clean := deltaRecords(3, 0, 0, 50)
-		c := newCursorOver(t,
+		c := newCursorOver(t, 3,
 			writeVenueFile(t, "day1.bin", 3, clean),
 			corruptVenueFile(t, "day2.bin", 1000, 1000, 50))
 
@@ -389,7 +389,7 @@ func TestCursorCloseReleasesEveryFile(t *testing.T) {
 		}
 		readers[i] = r
 	}
-	c, err := NewCursor(readers)
+	c, err := NewCursor(3, readers)
 	if err != nil {
 		t.Fatalf("NewCursor() error = %v, want nil", err)
 	}
@@ -412,7 +412,7 @@ func TestCursorCloseReleasesEveryFile(t *testing.T) {
 }
 
 func TestCursorNextAfterExhaustionStaysExhausted(t *testing.T) {
-	c := newCursorOver(t, writeVenueFile(t, "day1.bin", 3, deltaRecords(3, 100, 0, 2)))
+	c := newCursorOver(t, 3, writeVenueFile(t, "day1.bin", 3, deltaRecords(3, 100, 0, 2)))
 	if _, err := drainCursor(t, c); err != nil {
 		t.Fatalf("Next() error = %v, want nil", err)
 	}

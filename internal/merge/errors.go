@@ -8,7 +8,8 @@ import "errors"
 // and because fmt.Errorf is banned here for that reason. Compare them
 // with errors.Is.
 var (
-	ErrVenueMismatch = errors.New("merge: one partition holds more than one venue")
-	ErrDuplicateKey  = errors.New("merge: two records share an ordering key")
-	ErrOutOfOrder    = errors.New("merge: record key does not increase")
+	ErrVenueMismatch  = errors.New("merge: one partition holds more than one venue")
+	ErrDuplicateVenue = errors.New("merge: two partitions hold the same venue")
+	ErrDuplicateKey   = errors.New("merge: two records share an ordering key")
+	ErrOutOfOrder     = errors.New("merge: record key does not increase")
 )
