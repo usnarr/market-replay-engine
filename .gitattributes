@@ -1,0 +1,3 @@
+# Golden fixtures are byte-exact. Without this, git on Windows converts
+# their line endings on checkout and every round-trip test fails there.
+testdata/format/golden/** binary

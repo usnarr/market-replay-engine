@@ -13,6 +13,8 @@
 // that file is the product's core claim.
 package store
 
+import "encoding/binary"
+
 // RecordSize is the fixed stride of the record array in bytes. Record i
 // starts at header_size + RecordSize*i, so a record index converts to a
 // file offset by arithmetic alone. Every index in this format depends on
@@ -62,6 +64,16 @@ const (
 	sideFlagsMask uint8 = 0x01
 )
 
+// Blob region geometry. A snapshot's level data lives in the sidecar
+// blob region, never inline, because a 50-level book cannot fit a
+// 64-byte record. See docs/format.md.
+const (
+	// blobHeaderSize covers the blob's own crc32c, bid_count and ask_count.
+	blobHeaderSize = 8
+	// levelSize is the stride of one price level: price then size.
+	levelSize = 16
+)
+
 // Record is one decoded event. It is a value type with no pointer fields,
 // so it can be returned from the reader's hot path without allocating.
 // Blob fields are meaningful only when RecordType is
@@ -78,6 +90,96 @@ type Record struct {
 	BlobOffset     uint64
 	BlobLen        uint32
 	LevelCount     uint16
+}
+
+// validateRecord reports whether rec's type-dependent fields are
+// consistent. Both encode and decode go through it, which is what makes
+// decode-then-encode reproduce the original bytes exactly: a field this
+// function rejects can never reach a file, so no file can hold a value
+// that survives decode but changes on re-encode.
+func validateRecord(rec Record) error {
+	if rec.RecordType >= recordTypeCount {
+		return ErrRecordType
+	}
+	if rec.SideFlags&^sideFlagsMask != 0 {
+		return ErrSideFlags
+	}
+	if rec.RecordType != RecordTypeSnapshotPointer {
+		if rec.BlobOffset != 0 || rec.BlobLen != 0 || rec.LevelCount != 0 {
+			return ErrUnusedFieldSet
+		}
+		return nil
+	}
+
+	// A snapshot pointer carries no price, size or side of its own; those
+	// live in the blob's levels. They are hashed by canonical_v1 for every
+	// record type, so leaving them unconstrained would let two files with
+	// the same meaning hash differently.
+	if rec.Price != 0 || rec.Size != 0 || rec.SideFlags != 0 {
+		return ErrUnusedFieldSet
+	}
+	if rec.BlobLen < blobHeaderSize || (rec.BlobLen-blobHeaderSize)%levelSize != 0 {
+		return ErrBlobLen
+	}
+	if uint32(rec.LevelCount) != (rec.BlobLen-blobHeaderSize)/levelSize {
+		return ErrBlobLen
+	}
+	return nil
+}
+
+// encodeRecord writes rec into the first RecordSize bytes of dst, and
+// panics if dst is shorter. It writes every byte, including explicit
+// zeroes for the reserved range, so the result never depends on what dst
+// held before. Callers validate rec first; this function does not.
+func encodeRecord(dst []byte, rec Record) {
+	dst = dst[:RecordSize:RecordSize]
+
+	binary.LittleEndian.PutUint64(dst[offExchangeTs:], uint64(rec.ExchangeTs))
+	binary.LittleEndian.PutUint64(dst[offSequenceNumber:], rec.SequenceNumber)
+	binary.LittleEndian.PutUint32(dst[offInstrumentID:], rec.InstrumentID)
+	binary.LittleEndian.PutUint16(dst[offVenueID:], rec.VenueID)
+	dst[offRecordType] = rec.RecordType
+	dst[offSideFlags] = rec.SideFlags
+	binary.LittleEndian.PutUint64(dst[offPrice:], uint64(rec.Price))
+	binary.LittleEndian.PutUint64(dst[offSize:], uint64(rec.Size))
+	binary.LittleEndian.PutUint64(dst[offBlobOffset:], rec.BlobOffset)
+	binary.LittleEndian.PutUint32(dst[offBlobLen:], rec.BlobLen)
+	binary.LittleEndian.PutUint16(dst[offLevelCount:], rec.LevelCount)
+	clear(dst[offReserved : offReserved+lenReserved])
+}
+
+// decodeRecord reads one record from the first RecordSize bytes of src.
+// It returns ErrShortRecord if src is too small, and a typed error if any
+// byte of the record is undefined by this format version.
+func decodeRecord(src []byte) (Record, error) {
+	if len(src) < RecordSize {
+		return Record{}, ErrShortRecord
+	}
+	src = src[:RecordSize:RecordSize]
+
+	rec := Record{
+		ExchangeTs:     int64(binary.LittleEndian.Uint64(src[offExchangeTs:])),
+		SequenceNumber: binary.LittleEndian.Uint64(src[offSequenceNumber:]),
+		InstrumentID:   binary.LittleEndian.Uint32(src[offInstrumentID:]),
+		VenueID:        binary.LittleEndian.Uint16(src[offVenueID:]),
+		RecordType:     src[offRecordType],
+		SideFlags:      src[offSideFlags],
+		Price:          int64(binary.LittleEndian.Uint64(src[offPrice:])),
+		Size:           int64(binary.LittleEndian.Uint64(src[offSize:])),
+		BlobOffset:     binary.LittleEndian.Uint64(src[offBlobOffset:]),
+		BlobLen:        binary.LittleEndian.Uint32(src[offBlobLen:]),
+		LevelCount:     binary.LittleEndian.Uint16(src[offLevelCount:]),
+	}
+
+	for _, b := range src[offReserved : offReserved+lenReserved] {
+		if b != 0 {
+			return Record{}, ErrReserved
+		}
+	}
+	if err := validateRecord(rec); err != nil {
+		return Record{}, err
+	}
+	return rec, nil
 }
 
 // compareKey orders a and b by the total ordering key
