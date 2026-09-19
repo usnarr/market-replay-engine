@@ -37,4 +37,6 @@ var allAnalyzers = []*analysis.Analyzer{
 	NoRandV1,
 	NoSyncMap,
 	NoHashMaphash,
+	NoFmtSprintHotPath,
+	NoAnyHotPath,
 }
