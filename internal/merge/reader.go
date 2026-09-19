@@ -1,6 +1,8 @@
 package merge
 
 import (
+	"math/rand/v2"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -178,6 +180,13 @@ type venueFeed struct {
 
 	last    Key
 	hasLast bool
+
+	// perturb is nil in every production replay. The chaos test is the
+	// only caller that sets it, to a runtime.Gosched call gated by its
+	// own venue-seeded math/rand/v2 source, so it can shift this
+	// goroutine's interleaving with the merge, the other venues, and the
+	// worker pool without touching a clock.
+	perturb func()
 }
 
 func newVenueFeed(c *Cursor, abort *atomic.Bool) *venueFeed {
@@ -236,7 +245,9 @@ func (f *venueFeed) run(p *pool) {
 			if !ok {
 				break
 			}
+			f.doPerturb()
 			b := <-f.free
+			f.doPerturb()
 			p.queue <- workItem{reader: r, start: start, count: count, batch: b}
 			inflight = append(inflight, b)
 		}
@@ -246,6 +257,7 @@ func (f *venueFeed) run(p *pool) {
 
 		b := inflight[0]
 		inflight = inflight[1:]
+		f.doPerturb()
 		<-b.done
 		if f.abort.Load() {
 			return
@@ -253,7 +265,44 @@ func (f *venueFeed) run(p *pool) {
 		if b.err == nil {
 			b.err = f.checkSeam(b)
 		}
+		f.doPerturb()
 		f.ch <- b
+	}
+}
+
+// doPerturb calls perturb if the chaos test set one. It is nil in every
+// production replay, so this is one nil check with no call behind it.
+func (f *venueFeed) doPerturb() {
+	if f.perturb != nil {
+		f.perturb()
+	}
+}
+
+// newChaosRand returns the math/rand/v2 source one venue's perturbation
+// draws from. Seeding by (seed, venueID) — never a worker index or a
+// start-order-derived value — is what keeps the chaos test's own
+// randomness free of the goroutine-identity dependency it exists to
+// rule out elsewhere.
+func newChaosRand(seed uint64, venueID uint16) *rand.Rand {
+	return rand.New(rand.NewPCG(seed, uint64(venueID)))
+}
+
+// chaosPerturb returns a perturb func for one venue feed: at each call,
+// it yields the processor with even odds, using a source owned by this
+// one goroutine. rand/v2's *rand.Rand has no internal lock, so sharing
+// one across goroutines would be a data race; a separate instance per
+// venue avoids that instead of serializing on one.
+//
+// runtime.Gosched, never time.Sleep: a real sleep reads the clock
+// indirectly through the scheduler, which this repository allows only
+// inside internal/clock, and it would slow the test for no benefit
+// Gosched does not also give.
+func chaosPerturb(seed uint64, venueID uint16) func() {
+	rng := newChaosRand(seed, venueID)
+	return func() {
+		if rng.Uint64()&1 == 0 {
+			runtime.Gosched()
+		}
 	}
 }
 

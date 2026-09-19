@@ -90,7 +90,7 @@ type Merger struct {
 // no worker pool. Use it when a replay should start no goroutines at
 // all; the output is identical to NewConcurrentMerger's.
 func NewMerger(cursors []*Cursor) (*Merger, error) {
-	return newMerger(cursors, 0)
+	return newMerger(cursors, 0, nil)
 }
 
 // NewConcurrentMerger returns a merger whose records are decoded by a
@@ -101,7 +101,20 @@ func NewConcurrentMerger(cursors []*Cursor, workers int) (*Merger, error) {
 	if workers < 1 {
 		return nil, ErrWorkerCount
 	}
-	return newMerger(cursors, workers)
+	return newMerger(cursors, workers, nil)
+}
+
+// newMergerChaos is NewConcurrentMerger with scheduling perturbation
+// injected into each venue's owner goroutine, for the chaos test only.
+// Each venue gets its own math/rand/v2 source seeded from (seed,
+// venueID) — never from a worker index or start order, which would
+// reintroduce exactly the goroutine-identity dependency the chaos test
+// exists to rule out.
+func newMergerChaos(cursors []*Cursor, workers int, seed uint64) (*Merger, error) {
+	if workers < 1 {
+		return nil, ErrWorkerCount
+	}
+	return newMerger(cursors, workers, &seed)
 }
 
 // newMerger takes ownership of the cursors. It reads one event from each
@@ -112,7 +125,7 @@ func NewConcurrentMerger(cursors []*Cursor, workers int) (*Merger, error) {
 // cursors can never tie on the ordering key rests on their venue ids
 // differing, and so does the claim that a duplicate key can only come
 // from inside one partition.
-func newMerger(cursors []*Cursor, workers int) (*Merger, error) {
+func newMerger(cursors []*Cursor, workers int, chaosSeed *uint64) (*Merger, error) {
 	venues := make([]uint16, len(cursors))
 	for i, c := range cursors {
 		venues[i] = c.VenueID()
@@ -135,6 +148,12 @@ func newMerger(cursors []*Cursor, workers int) (*Merger, error) {
 		m.venues = make([]*venueFeed, len(cursors))
 		for i, c := range cursors {
 			vf := newVenueFeed(c, &m.abort)
+			if chaosSeed != nil {
+				// vf.venueID, not the loop index i or any other
+				// start-order-derived value: see chaosPerturb's doc
+				// comment for why.
+				vf.perturb = chaosPerturb(*chaosSeed, vf.venueID)
+			}
 			m.venues[i] = vf
 			m.feeds[i] = feed{ch: vf.ch, free: vf.free}
 			go vf.run(m.pool)
