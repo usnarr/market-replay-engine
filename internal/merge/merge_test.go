@@ -19,7 +19,7 @@ type venueFiles struct {
 	days  [][]store.Record
 }
 
-func newMergerOver(t *testing.T, partitions []venueFiles) *Merger {
+func cursorsFor(t *testing.T, partitions []venueFiles) []*Cursor {
 	t.Helper()
 
 	cursors := make([]*Cursor, len(partitions))
@@ -30,12 +30,23 @@ func newMergerOver(t *testing.T, partitions []venueFiles) *Merger {
 		}
 		cursors[i] = newCursorOver(t, p.venue, paths...)
 	}
-	m, err := NewMerger(cursors)
+	return cursors
+}
+
+// replayPartitions builds a merger and drains it, returning the keys it
+// emitted and the first error from either step. A bad key is reported
+// wherever the merge first decodes it, which is at construction when it
+// sits in the first batch of its venue, so a test must not assume which
+// call surfaces it.
+func replayPartitions(t *testing.T, partitions []venueFiles) ([]Key, error) {
+	t.Helper()
+
+	m, err := NewMerger(cursorsFor(t, partitions))
 	if err != nil {
-		t.Fatalf("NewMerger() error = %v, want nil", err)
+		return nil, err
 	}
 	t.Cleanup(func() { _ = m.Close() })
-	return m
+	return drainMerger(t, m)
 }
 
 // drainMerger reads a merger to the end, or to its first error.
@@ -132,9 +143,7 @@ func TestMergerEndsWhenEveryVenueIsExhausted(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newMergerOver(t, tt.partitions)
-
-			got, err := drainMerger(t, m)
+			got, err := replayPartitions(t, tt.partitions)
 
 			if err != nil {
 				t.Fatalf("Next() error = %v, want nil", err)
@@ -163,9 +172,7 @@ func TestMergerWithNothingToMerge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newMergerOver(t, tt.partitions)
-
-			got, err := drainMerger(t, m)
+			got, err := replayPartitions(t, tt.partitions)
 
 			if err != nil {
 				t.Fatalf("Next() error = %v, want nil", err)
@@ -197,12 +204,10 @@ func TestMergerReportsACursorError(t *testing.T) {
 	// A cursor rejects a key that does not increase across a file
 	// boundary. The merge must surface that, not skip the partition.
 	last := records(3, 5, 100)[0]
-	m := newMergerOver(t, []venueFiles{
+	_, err := replayPartitions(t, []venueFiles{
 		{venue: 3, days: [][]store.Record{{last}, {last}}},
 		{venue: 4, days: [][]store.Record{records(4, 0, 1, 2, 3)}},
 	})
-
-	_, err := drainMerger(t, m)
 
 	if !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("Next() error = %v, want %v", err, ErrDuplicateKey)

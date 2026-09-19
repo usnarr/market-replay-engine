@@ -81,11 +81,8 @@ func (c *Cursor) Next() (Event, bool, error) {
 
 		key := keyOf(rec)
 		if c.hasLast {
-			switch cmp := compareKey(c.last, key); {
-			case cmp == 0:
-				return Event{}, false, ErrDuplicateKey
-			case cmp > 0:
-				return Event{}, false, ErrOutOfOrder
+			if err := checkOrder(c.last, key); err != nil {
+				return Event{}, false, err
 			}
 		}
 		c.last = key

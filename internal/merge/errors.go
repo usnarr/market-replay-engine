@@ -12,4 +12,5 @@ var (
 	ErrDuplicateVenue = errors.New("merge: two partitions hold the same venue")
 	ErrDuplicateKey   = errors.New("merge: two records share an ordering key")
 	ErrOutOfOrder     = errors.New("merge: record key does not increase")
+	ErrWorkerCount    = errors.New("merge: worker count must be positive")
 )

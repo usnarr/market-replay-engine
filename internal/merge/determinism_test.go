@@ -41,22 +41,30 @@ var synthShape = [][]int{
 // synthDataset is a generated multi-venue dataset on disk, partitioned
 // by venue and day — the granularity cmd/convert produces.
 type synthDataset struct {
+	shape  [][]int
 	venues []uint16
 	files  [][]string
 }
 
-// buildSynthDataset writes the dataset and returns it. Generation is a
-// pure function of synthSeed and synthShape.
+// buildSynthDataset writes the standard dataset and returns it.
+// Generation is a pure function of synthSeed and the shape.
 func buildSynthDataset(t *testing.T) *synthDataset {
+	t.Helper()
+
+	return buildDataset(t, synthShape)
+}
+
+func buildDataset(t *testing.T, shape [][]int) *synthDataset {
 	t.Helper()
 
 	dir := t.TempDir()
 	ds := &synthDataset{
-		venues: make([]uint16, len(synthShape)),
-		files:  make([][]string, len(synthShape)),
+		shape:  shape,
+		venues: make([]uint16, len(shape)),
+		files:  make([][]string, len(shape)),
 	}
 
-	for v, days := range synthShape {
+	for v, days := range shape {
 		venue := uint16(v + 1)
 		ds.venues[v] = venue
 
@@ -115,7 +123,7 @@ func buildSynthDataset(t *testing.T) *synthDataset {
 // recordCount is how many records the dataset holds in total.
 func (ds *synthDataset) recordCount() int {
 	n := 0
-	for _, days := range synthShape {
+	for _, days := range ds.shape {
 		for _, count := range days {
 			n += count
 		}
@@ -161,8 +169,9 @@ type replayResult struct {
 	keys      []Key
 }
 
-// replaySynth merges the dataset in the given venue order and hashes the
-// merged stream with the canonical_v1 projection.
+// replaySynth merges the dataset in the given venue order, decoding in
+// the calling goroutine, and hashes the merged stream with the
+// canonical_v1 projection.
 func replaySynth(t *testing.T, ds *synthDataset, order []uint16) replayResult {
 	t.Helper()
 
@@ -170,6 +179,23 @@ func replaySynth(t *testing.T, ds *synthDataset, order []uint16) replayResult {
 	if err != nil {
 		t.Fatalf("NewMerger() error = %v, want nil", err)
 	}
+	return drainReplay(t, ds, m)
+}
+
+// replaySynthConcurrent is replaySynth with a pool of workers decoding.
+func replaySynthConcurrent(t *testing.T, ds *synthDataset, order []uint16, workers int) replayResult {
+	t.Helper()
+
+	m, err := NewConcurrentMerger(ds.openCursors(t, order), workers)
+	if err != nil {
+		t.Fatalf("NewConcurrentMerger(%d) error = %v, want nil", workers, err)
+	}
+	return drainReplay(t, ds, m)
+}
+
+func drainReplay(t *testing.T, ds *synthDataset, m *Merger) replayResult {
+	t.Helper()
+
 	defer func() {
 		if err := m.Close(); err != nil {
 			t.Errorf("Merger.Close() error = %v, want nil", err)
@@ -273,7 +299,53 @@ func TestDeterminism(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("the_hash_does_not_depend_on_the_worker_count", func(t *testing.T) {
+		// The worker count changes decode and I/O concurrency only. It
+		// never changes the tree's shape, and a batch carries nothing
+		// that says which worker filled it.
+		for _, workers := range workerCounts {
+			t.Run("workers_"+strconv.Itoa(workers), func(t *testing.T) {
+				got := replaySynthConcurrent(t, ds, ds.venues, workers)
+
+				assertSameReplay(t, want, got)
+			})
+		}
+	})
+
+	t.Run("the_hash_does_not_depend_on_the_worker_count_and_gomaxprocs_together", func(t *testing.T) {
+		// Varying one at a time can hide a dependency on their ratio:
+		// with GOMAXPROCS pinned to 1, many workers never truly overlap.
+		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
+
+		for _, procs := range []int{1, 4, 16} {
+			for _, workers := range workerCounts {
+				t.Run("gomaxprocs_"+strconv.Itoa(procs)+"_workers_"+strconv.Itoa(workers), func(t *testing.T) {
+					runtime.GOMAXPROCS(procs)
+
+					got := replaySynthConcurrent(t, ds, ds.venues, workers)
+
+					assertSameReplay(t, want, got)
+				})
+			}
+		}
+	})
+
+	t.Run("the_worker_pool_agrees_with_inline_decoding_on_every_venue_order", func(t *testing.T) {
+		for i := 1; i < len(ds.venues); i++ {
+			t.Run("rotated_by_"+strconv.Itoa(i), func(t *testing.T) {
+				order := append(slices.Clone(ds.venues[i:]), ds.venues[:i]...)
+
+				got := replaySynthConcurrent(t, ds, order, 8)
+
+				assertSameReplay(t, want, got)
+			})
+		}
+	})
 }
+
+// workerCounts are the worker counts make determinism replays at.
+var workerCounts = []int{1, 4, 16, 64}
 
 func assertSameReplay(t *testing.T, want, got replayResult) {
 	t.Helper()

@@ -44,6 +44,22 @@ func keyOf(rec store.Record) Key {
 	}
 }
 
+// checkOrder reports whether next may follow prev in the stream. Every
+// layer that validates the ordering key calls this one function: the
+// cursor between two records, a worker inside its batch, a venue at the
+// seam between two batches, and the loser tree across the merged
+// stream. A key that repeats is ErrDuplicateKey and one that goes
+// backwards is ErrOutOfOrder.
+func checkOrder(prev, next Key) error {
+	switch c := compareKey(prev, next); {
+	case c == 0:
+		return ErrDuplicateKey
+	case c > 0:
+		return ErrOutOfOrder
+	}
+	return nil
+}
+
 // compareKey returns a negative value, zero, or a positive value as a
 // sorts before, equal to, or after b. Equal keys are a hard error
 // everywhere this package compares them: two records sharing a key are

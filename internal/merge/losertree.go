@@ -106,13 +106,7 @@ func (t *LoserTree) Advance(key Key) error {
 		// stream as a duplicate.
 		return nil
 	}
-	switch c := compareKey(retired, next); {
-	case c == 0:
-		return ErrDuplicateKey
-	case c > 0:
-		return ErrOutOfOrder
-	}
-	return nil
+	return checkOrder(retired, next)
 }
 
 // fix replays cursor i's matches from its leaf to the root. The path is
