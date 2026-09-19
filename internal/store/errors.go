@@ -26,4 +26,9 @@ var (
 	ErrPriceScale    = errors.New("store: price_scale must be positive")
 	ErrRecordCount   = errors.New("store: record_count out of range")
 	ErrOffsetChain   = errors.New("store: file regions do not form a valid chain")
+
+	ErrShortIndex = errors.New("store: index region shorter than its entry count")
+	ErrIndexOrder = errors.New("store: index entries are not in order")
+	ErrIndexRange = errors.New("store: index entry names a record that does not exist")
+	ErrIndexCount = errors.New("store: index entry count does not match the record array")
 )

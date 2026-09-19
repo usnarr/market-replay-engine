@@ -134,8 +134,18 @@ func TestValidateHeader(t *testing.T) {
 			want: ErrOffsetChain,
 		},
 		{
+			name: "time_index_count_disagrees_with_the_block_count",
+			mut:  func(h *header, _ *uint64) { h.TimeIndexCount++ },
+			want: ErrIndexCount,
+		},
+		{
 			name: "time_index_count_wraps_uint64",
 			mut:  func(h *header, _ *uint64) { h.TimeIndexCount = ^uint64(0) },
+			want: ErrIndexCount,
+		},
+		{
+			name: "time_index_offset_near_the_uint64_ceiling",
+			mut:  func(h *header, _ *uint64) { h.TimeIndexOffset = ^uint64(0) - 4 },
 			want: ErrOffsetChain,
 		},
 		{
@@ -144,8 +154,18 @@ func TestValidateHeader(t *testing.T) {
 			want: ErrOffsetChain,
 		},
 		{
+			name: "snapshot_index_count_exceeds_the_record_count",
+			mut:  func(h *header, _ *uint64) { h.SnapshotIndexCount = h.RecordCount + 1 },
+			want: ErrIndexCount,
+		},
+		{
 			name: "snapshot_index_count_wraps_uint64",
 			mut:  func(h *header, _ *uint64) { h.SnapshotIndexCount = ^uint64(0) },
+			want: ErrIndexCount,
+		},
+		{
+			name: "snapshot_index_offset_near_the_uint64_ceiling",
+			mut:  func(h *header, _ *uint64) { h.SnapshotIndexOffset = ^uint64(0) - 4 },
 			want: ErrOffsetChain,
 		},
 		{

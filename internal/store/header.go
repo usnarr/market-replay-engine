@@ -158,6 +158,17 @@ func validateHeader(h header, fileLen uint64) error {
 		return ErrRecordCount
 	}
 
+	// The time index holds exactly one entry per block, so its count is
+	// derived, not free. A file that disagrees would let a seek land in
+	// the wrong block.
+	blocks := blockCountFor(h.RecordCount, h.BlockSizeRecords)
+	if h.TimeIndexCount != blocks {
+		return ErrIndexCount
+	}
+	if h.SnapshotIndexCount > h.RecordCount {
+		return ErrIndexCount
+	}
+
 	// Walk the region chain once, forwards. Each step checks that the
 	// region starts at or after the previous one ended, then that its own
 	// extent does not overflow. Addition is always written as a
@@ -183,7 +194,6 @@ func validateHeader(h header, fileLen uint64) error {
 	}
 	end = h.SnapshotIndexOffset + h.SnapshotIndexCount*indexEntrySize
 
-	blocks := blockCountFor(h.RecordCount, h.BlockSizeRecords)
 	if h.FooterOffset < end || blocks > (^uint64(0)-h.FooterOffset)/footerEntrySize {
 		return ErrOffsetChain
 	}
