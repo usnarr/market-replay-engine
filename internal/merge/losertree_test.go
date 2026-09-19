@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 
@@ -13,9 +14,21 @@ func mk(ts int64, venue uint16, seq uint64, inst uint32) Key {
 }
 
 // drainTree drives a tree over per-cursor key streams and returns the
-// winners in the order it chose them. It is the whole merge loop, with
-// plain slices standing in for cursors.
+// winners in the order it chose them. It fails the test if the tree
+// rejects a key; use tryDrainTree for input meant to be rejected.
 func drainTree(t *testing.T, streams [][]Key) []Key {
+	t.Helper()
+
+	got, err := tryDrainTree(t, streams)
+	if err != nil {
+		t.Fatalf("Advance() error = %v, want nil", err)
+	}
+	return got
+}
+
+// tryDrainTree is the whole merge loop, with plain slices standing in
+// for cursors. It stops at the tree's first rejected key.
+func tryDrainTree(t *testing.T, streams [][]Key) ([]Key, error) {
 	t.Helper()
 
 	total := 0
@@ -37,7 +50,7 @@ func drainTree(t *testing.T, streams [][]Key) []Key {
 	for {
 		i, key := tree.Winner()
 		if key == SentinelKey {
-			return got
+			return got, nil
 		}
 		if len(got) >= total {
 			t.Fatalf("tree produced more than the %d keys it was given; it is not draining", total)
@@ -49,7 +62,9 @@ func drainTree(t *testing.T, streams [][]Key) []Key {
 			next = streams[i][pos[i]]
 			pos[i]++
 		}
-		tree.Advance(next)
+		if err := tree.Advance(next); err != nil {
+			return got, err
+		}
 	}
 }
 
@@ -206,9 +221,11 @@ func TestLoserTreeShapeDependsOnlyOnCursorCount(t *testing.T) {
 		tree.Init()
 		before := len(tree.tree)
 
-		tree.Advance(SentinelKey)
-		tree.Advance(streams[1][1])
-		tree.Advance(SentinelKey)
+		for _, key := range []Key{SentinelKey, streams[1][1], SentinelKey} {
+			if err := tree.Advance(key); err != nil {
+				t.Fatalf("Advance(%v) error = %v, want nil", key, err)
+			}
+		}
 
 		if len(tree.tree) != before {
 			t.Errorf("tree has %d nodes after draining, want %d", len(tree.tree), before)
@@ -217,6 +234,91 @@ func TestLoserTreeShapeDependsOnlyOnCursorCount(t *testing.T) {
 			t.Errorf("Winner() key = %v, want the sentinel once every cursor is exhausted", key)
 		}
 	})
+}
+
+func TestLoserTreeRejectsKeysThatDoNotIncrease(t *testing.T) {
+	// The check costs one comparison, because the tree already knows the
+	// key it is retiring and the key that replaces it at the root. A
+	// duplicate is unreachable on a checksum-validated artifact written
+	// by this project's own writer, so reaching it means the file is
+	// corrupt or the writer's validation was bypassed.
+	tests := []struct {
+		name    string
+		streams [][]Key
+		want    error
+		wantN   int
+	}{
+		{
+			name:    "one_cursor_repeats_a_key",
+			streams: [][]Key{{mk(10, 1, 0, 7), mk(10, 1, 0, 7)}},
+			want:    ErrDuplicateKey,
+			wantN:   1,
+		},
+		{
+			name:    "one_cursor_repeats_a_key_behind_another_cursor",
+			streams: [][]Key{{mk(10, 1, 0, 7), mk(10, 1, 0, 7)}, {mk(50, 2, 0, 7)}},
+			want:    ErrDuplicateKey,
+			wantN:   1,
+		},
+		{
+			name:    "two_cursors_hold_the_same_key",
+			streams: [][]Key{{mk(10, 1, 0, 7)}, {mk(10, 1, 0, 7)}},
+			want:    ErrDuplicateKey,
+			wantN:   1,
+		},
+		{
+			name:    "one_cursor_goes_backwards",
+			streams: [][]Key{{mk(20, 1, 1, 7), mk(10, 1, 0, 7)}},
+			want:    ErrOutOfOrder,
+			wantN:   1,
+		},
+		{
+			name:    "one_cursor_goes_backwards_after_another_cursor_wins",
+			streams: [][]Key{{mk(10, 1, 0, 7), mk(30, 1, 1, 7)}, {mk(20, 2, 0, 7), mk(15, 2, 1, 7)}},
+			want:    ErrOutOfOrder,
+			wantN:   2,
+		},
+		{
+			name:    "a_key_that_only_repeats_its_instrument_id",
+			streams: [][]Key{{mk(10, 1, 0, 7), mk(10, 1, 1, 7), mk(10, 1, 1, 7)}},
+			want:    ErrDuplicateKey,
+			wantN:   2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tryDrainTree(t, tt.streams)
+
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("Advance() error = %v, want %v", err, tt.want)
+			}
+			if len(got) != tt.wantN {
+				t.Errorf("emitted %d keys before the error, want %d — the offending key must not be emitted",
+					len(got), tt.wantN)
+			}
+		})
+	}
+}
+
+func TestLoserTreeAcceptsEveryCursorReachingTheSentinelAtOnce(t *testing.T) {
+	// Every exhausted cursor holds the same sentinel key, so the
+	// ordering check must not read the end of the stream as a duplicate.
+	streams := [][]Key{
+		{mk(10, 1, 0, 7)},
+		{mk(20, 2, 0, 7)},
+		{},
+		{mk(30, 3, 0, 7)},
+	}
+
+	got, err := tryDrainTree(t, streams)
+
+	if err != nil {
+		t.Fatalf("Advance() error = %v, want nil", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("emitted %d keys, want 3", len(got))
+	}
 }
 
 func TestLoserTreeCursorOrderDoesNotChangeOutput(t *testing.T) {

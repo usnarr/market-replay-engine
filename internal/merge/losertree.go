@@ -86,10 +86,33 @@ func (t *LoserTree) Winner() (int, Key) {
 // that cursor's matches to the root. Pass SentinelKey when the cursor
 // has no more records. Calling Advance once Winner reports SentinelKey
 // is a caller error.
-func (t *LoserTree) Advance(key Key) {
+//
+// It also checks the ordering invariant the whole merge rests on: the
+// key it retires must sort strictly before the key that takes the root.
+// A tie is ErrDuplicateKey and a decrease is ErrOutOfOrder, both hard
+// stops. The check is one comparison, because both keys are already
+// known — and it covers the whole stream, so a duplicate inside one
+// venue and a duplicate across two are caught by the same line.
+func (t *LoserTree) Advance(key Key) error {
 	w := t.tree[0]
+	retired := t.keys[w]
 	t.keys[w] = key
 	t.fix(w)
+
+	next := t.keys[t.tree[0]]
+	if next == SentinelKey {
+		// Every cursor is exhausted. They all hold the same sentinel, so
+		// checking it against the retired key would read the end of the
+		// stream as a duplicate.
+		return nil
+	}
+	switch c := compareKey(retired, next); {
+	case c == 0:
+		return ErrDuplicateKey
+	case c > 0:
+		return ErrOutOfOrder
+	}
+	return nil
 }
 
 // fix replays cursor i's matches from its leaf to the root. The path is
