@@ -36,4 +36,12 @@ var (
 	ErrFooterGeometry = errors.New("store: footer entry does not start where its block does")
 	ErrBlockRange     = errors.New("store: block index out of range")
 	ErrBlockChecksum  = errors.New("store: block checksum mismatch")
+
+	ErrWriterClosed     = errors.New("store: writer is closed")
+	ErrWriterAborted    = errors.New("store: writer was aborted")
+	ErrVenueMismatch    = errors.New("store: record venue_id does not match the file")
+	ErrOutOfOrder       = errors.New("store: record key does not increase")
+	ErrDuplicateKey     = errors.New("store: duplicate record key")
+	ErrUseWriteSnapshot = errors.New("store: write a snapshot pointer with WriteSnapshot")
+	ErrTooManyLevels    = errors.New("store: snapshot has more levels than level_count can hold")
 )

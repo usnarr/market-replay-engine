@@ -74,6 +74,17 @@ const (
 	levelSize = 16
 )
 
+// Level is one price level of a snapshot. It carries no side of its own:
+// a blob stores its bids and its asks as two counted runs, which is
+// denser than a side byte per level and leaves no undefined padding.
+// Price and Size are scaled integers, never floats — a float64 can be
+// NaN, which is not equal to itself and breaks both the comparator and
+// the hash.
+type Level struct {
+	Price int64
+	Size  int64
+}
+
 // Record is one decoded event. It is a value type with no pointer fields,
 // so it can be returned from the reader's hot path without allocating.
 // Blob fields are meaningful only when RecordType is
