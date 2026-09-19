@@ -96,7 +96,7 @@ Violating any of these breaks the only claim this project makes.
 
 **`time.Now()` appears exactly once in the codebase**, inside `clock.RealClock`. Everything else takes a `Clock`. This includes tests, timeouts, retries, and metrics timestamps on the replay path. A grep for `time.Now` outside `internal/clock` is a CI failure. This rule applies to first-party code in this repository — `grpc-go`, `prometheus/client_golang`, and the Go runtime itself call `time.Now` internally and are out of this repository's control; see `docs/determinism.md`.
 
-**Total ordering is `(exchange_ts, venue_id, sequence_number)`.** Ties are never broken by arrival order, goroutine identity, or anything else observable at runtime. If two events genuinely collide on all three, the format is wrong and that's a data problem to fix upstream.
+**Total ordering is `(exchange_ts, venue_id, sequence_number, instrument_id)`.** Ties are never broken by arrival order, goroutine identity, or anything else observable at runtime. `instrument_id` is the final tie-break, and it is part of the key because one venue can emit the same sequence number for two instruments at the same timestamp — the first three fields alone are not unique. If two events genuinely collide on all four, the format is wrong and that's a data problem to fix upstream.
 
 **Zero allocations on the hot path in steady state.** Enforced by benchmark assertion. `sync.Pool` for reusable buffers, struct-of-arrays for batches, decode in place from the mmap. Scoped to the in-process path, up to the fan-out boundary — gRPC's own codec and transport allocate regardless.
 
