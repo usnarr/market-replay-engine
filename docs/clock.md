@@ -34,4 +34,22 @@ A `Clock` implementation changes only *when* a record is delivered. It never cha
 
 `RealClock.NewTimer` wraps `time.AfterFunc`, not `time.NewTimer`. A bare `*time.Timer`'s channel carries `time.Time`, not `int64`, and converting it would need a forwarding goroutine that then has to reimplement `Stop`/`Reset` bookkeeping and the stale-value drain the standard library already provides for `AfterFunc` timers. The callback sends the real fire time into a capacity-1 channel; `Reset` and `Stop` drain that channel non-blockingly before delegating to the underlying `*time.Timer`. `Stop`'s return value has the same caveat as the standard library's: it reports whether it prevented the callback from running, but a value can still be pending on the channel if the callback had already fired.
 
-`SimClock`, the other implementation, is documented below once it lands in code.
+## `SimClock`
+
+Used by every test, and by the determinism suite. Two properties, deliberately in tension:
+
+1. **`SleepUntil` returns immediately and never advances `now`.** `SimClock` never sleeps in real time — this is what lets `make determinism` run in milliseconds instead of real elapsed replay time. It also never moves the clock as a side effect of a sleep call: if it did, concurrent sleepers would advance simulated time in goroutine-scheduling order, which is exactly the nondeterminism this package exists to remove. `Advance(d)` is the only way `now` moves.
+2. **Pacing is not exercised by the core determinism test.** This is stated as a written invariant, not a gap: pacing must not be able to affect record content or order, only the wall-clock timing of delivery.
+
+`Advance(d)` adds `d` to `now`, then fires every timer whose deadline is now due, in a fixed, deterministic order:
+
+- Order timers by deadline, ascending.
+- Break a tie between two timers with the identical deadline by a **monotonic registration ID**, assigned when `NewTimer` was called, ascending. Never by goroutine identity, never by map iteration.
+
+A fired `SimClock` timer sends **its own deadline**, not `SimClock`'s current `now`, on its channel — so the value a listener observes does not depend on how far a single `Advance` call overshot that timer's deadline. `RealClock` cannot offer this and sends the real fire time instead; this is a deliberate, documented difference between the two implementations, not an inconsistency to "fix."
+
+`SimClock` keeps its pending timers in a sorted slice, not a heap and not a map: `container/heap` is banned repository-wide (see the root `CLAUDE.md`), and a map would introduce unordered iteration into a package other code is likely to copy from as a pattern. The timer count in any given test is small, so a linear insert into a sorted slice is simpler than a heap and fast enough.
+
+`Reset` keeps a timer's original registration ID, so rescheduling it does not change its tie-break position relative to timers created around the same time.
+
+If `SimClock` is ever extended so multiple goroutines can call `SleepUntil` concurrently and get woken by the same `Advance` call, the wake order across those goroutines is still not allowed to be observable in content — only delivery timing may depend on it. Nobody should "fix" a flaky pacing test by making `SimClock`'s wake order match goroutine start order.
