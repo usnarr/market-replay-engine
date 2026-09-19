@@ -22,6 +22,10 @@ func TestAnalyzers(t *testing.T) {
 		{"flags_time_now_family_outside_realclock", NoTimeNow, "notimenow/..."},
 		{"flags_more_than_one_comm_clause_in_hot_path", NoMultiSelect, "nomultiselect/..."},
 		{"flags_map_range_in_ordered_packages", NoMapRangeOrdered, "nomaprangeordered/..."},
+		{"flags_container_heap_import", NoContainerHeap, "nocontainerheap"},
+		{"flags_math_rand_v1_import", NoRandV1, "norandv1"},
+		{"flags_sync_map_use", NoSyncMap, "nosyncmap"},
+		{"flags_hash_maphash_import", NoHashMaphash, "nohashmaphash"},
 	}
 
 	for _, tt := range tests {

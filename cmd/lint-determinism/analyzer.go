@@ -33,4 +33,8 @@ var allAnalyzers = []*analysis.Analyzer{
 	NoTimeNow,
 	NoMultiSelect,
 	NoMapRangeOrdered,
+	NoContainerHeap,
+	NoRandV1,
+	NoSyncMap,
+	NoHashMaphash,
 }
