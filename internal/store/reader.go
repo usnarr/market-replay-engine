@@ -202,6 +202,60 @@ func (r *Reader) AppendLevels(dst []Level, rec Record) ([]Level, int, error) {
 	return dst, bids, nil
 }
 
+// SeekTime returns the index of the first record whose exchange_ts is
+// at or after t. It returns Len() when every record is earlier, which is
+// a valid end cursor rather than an error, because the common caller is
+// "replay from t to the end". An error means the file is structurally
+// wrong, never that t simply matched nothing.
+//
+// The sparse index is non-decreasing, not strictly increasing: one venue
+// repeats a timestamp, and a run of equal timestamps can straddle a
+// block boundary or be longer than a whole block. So searching for the
+// block whose first timestamp is at or before t and scanning inside it
+// is wrong — the first matching record can sit in the block before. The
+// search below finds the first index entry at or after t instead, which
+// makes the previous entry strictly earlier than t and bounds the scan
+// to that block plus one record.
+func (r *Reader) SeekTime(t int64) (int, error) {
+	n := r.Len()
+	if n == 0 {
+		return 0, nil
+	}
+
+	b := searchTimeIndex(r.timeIndex, t)
+	if b == 0 {
+		return 0, nil
+	}
+
+	blockSize := int(r.hdr.BlockSizeRecords)
+	lo := (b - 1) * blockSize
+	hi := lo + blockSize
+	if b == len(r.timeIndex) || hi > n-1 {
+		hi = n - 1
+	}
+	for i := lo; i <= hi; i++ {
+		if r.RecordAt(i).ExchangeTs >= t {
+			return i, nil
+		}
+	}
+	return n, nil
+}
+
+// SnapshotBefore returns the index of the last snapshot pointer record
+// at or before recordIndex, and reports whether one exists. A seek uses
+// it to rewind to an epoch before replaying deltas forward, so that the
+// book it reconstructs is valid.
+func (r *Reader) SnapshotBefore(recordIndex int) (int, bool) {
+	if recordIndex < 0 {
+		return 0, false
+	}
+	i, ok := searchSnapshotIndex(r.snapIndex, uint64(recordIndex))
+	if !ok {
+		return 0, false
+	}
+	return int(i), true
+}
+
 // VerifyBlock checks one block's records against its stored checksum.
 // Callers verify a block once, when they first reach it, so reading
 // record 0 never costs a pass over the whole file.
