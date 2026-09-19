@@ -9,8 +9,15 @@ import (
 )
 
 // defaultBlockSizeRecords is the number of records one checksummed block
-// covers. See BENCHMARKS.md for the measurement behind the value.
-const defaultBlockSizeRecords = 4096
+// covers: 1024 records, or 64 KiB.
+//
+// Verification throughput is flat from 64 records upward, so it does not
+// constrain the choice. What does is seek cost, which is linear in the
+// block size because SeekTime scans inside one block, against the 20
+// bytes of footer and time index each block costs. At 1024 that
+// metadata is 0.03% of the file and a seek is under 5 microseconds. See
+// BENCHMARKS.md.
+const defaultBlockSizeRecords = 1024
 
 // writerBufSize is the record-stream buffer. Records are written 64
 // bytes at a time, so an unbuffered file would cost one syscall each.
