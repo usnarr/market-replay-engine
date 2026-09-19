@@ -13,4 +13,9 @@ var (
 	ErrReserved       = errors.New("store: reserved bytes are not zero")
 	ErrUnusedFieldSet = errors.New("store: a field unused by this record type is not zero")
 	ErrBlobLen        = errors.New("store: blob_len and level_count disagree")
+
+	ErrShortHeader = errors.New("store: buffer shorter than the header fields")
+	ErrBadMagic    = errors.New("store: not a replay hot-tier file")
+	ErrHeaderCRC   = errors.New("store: header checksum mismatch")
+	ErrPageSize    = errors.New("store: unusable page size")
 )
