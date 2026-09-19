@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/binary"
 	"hash/crc32"
-	"os"
 )
 
 // Reader serves one finalized hot-tier file. It is a concrete type, not
@@ -46,17 +45,6 @@ func Open(path string) (*Reader, error) {
 	}
 	r.closeFn = closeFn
 	return r, nil
-}
-
-// mapFile makes a file's bytes readable. Until the mmap backends land it
-// simply reads the whole file, which keeps the format layer testable on
-// every platform with no build tags.
-func mapFile(path string) ([]byte, func() error, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	return data, nil, nil
 }
 
 // openBytes validates a whole file image and indexes it. Every size it

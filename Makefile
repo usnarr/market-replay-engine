@@ -41,8 +41,17 @@ profile:
 # not the determinism analyzer itself: its testdata/ fixtures contain
 # deliberate violations, so running the analyzer against its own
 # module would fail by design.
+#
+# vet's unsafeptr check is disabled for internal/store alone. That
+# package turns the address MapViewOfFile returns into a byte slice,
+# which is the one place in this repository that needs unsafe and is
+# exactly what unsafeptr is built to flag. The check stays on
+# everywhere else. Only a Windows build compiles that file, so this
+# would otherwise be red on a developer's machine and invisible in CI,
+# where the lint job runs on Linux.
 lint:
-	go vet ./...
+	go vet $(shell go list ./... | grep -v '^replay/internal/store$$')
+	go vet -unsafeptr=false ./internal/store/...
 	staticcheck ./...
 	go run ./cmd/lint-determinism ./...
 	cd cmd/lint-determinism && go vet ./... && staticcheck ./...

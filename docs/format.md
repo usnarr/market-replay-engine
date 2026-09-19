@@ -228,4 +228,6 @@ Without this framing two different record sequences can concatenate to the same 
 
 **A `Reader` is immutable once `Open` returns**, so any number of goroutines may read from it at once. `Close` is the exception, and ordering it is the caller's responsibility: it must not run while another goroutine is still reading. Synchronising that inside the reader would cost the hot path something the merge stage's own lifecycle already prevents, since it closes a cursor's reader only after draining it.
 
+**One `unsafe` conversion exists, on Windows only.** `MapViewOfFile` returns a bare address, so `mmap_windows.go` turns it into a byte slice. This is not the struct-over-file-bytes cast the format rules forbid: no Go type is laid over file data, and every field is still decoded one at a time. `go vet`'s `unsafeptr` check is disabled for `internal/store` alone because of it, and `make lint` says so.
+
 **A blob returned by `Reader.Blob` aliases the file image.** It stays valid until `Close`. Once the file is memory-mapped, touching it afterwards faults rather than panics, so a caller that needs it for longer must copy it.
