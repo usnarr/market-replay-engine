@@ -44,4 +44,10 @@ var (
 	ErrDuplicateKey     = errors.New("store: duplicate record key")
 	ErrUseWriteSnapshot = errors.New("store: write a snapshot pointer with WriteSnapshot")
 	ErrTooManyLevels    = errors.New("store: snapshot has more levels than level_count can hold")
+
+	ErrHeaderRange    = errors.New("store: header exchange_ts range does not match the records")
+	ErrNotSnapshot    = errors.New("store: record is not a snapshot pointer")
+	ErrBlobOutOfRange = errors.New("store: blob lies outside the blob region")
+	ErrBlobChecksum   = errors.New("store: blob checksum mismatch")
+	ErrBlobLevelCount = errors.New("store: blob level counts disagree with level_count")
 )

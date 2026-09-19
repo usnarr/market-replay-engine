@@ -159,16 +159,16 @@ func encodeRecord(dst []byte, rec Record) {
 	clear(dst[offReserved : offReserved+lenReserved])
 }
 
-// decodeRecord reads one record from the first RecordSize bytes of src.
-// It returns ErrShortRecord if src is too small, and a typed error if any
-// byte of the record is undefined by this format version.
-func decodeRecord(src []byte) (Record, error) {
-	if len(src) < RecordSize {
-		return Record{}, ErrShortRecord
-	}
+// decodeRecordFields reads one record's fields from the first RecordSize
+// bytes of src and panics if src is shorter. It checks nothing: it is
+// the reader's hot path, where a per-record validation branch would cost
+// more than it buys and where the block checksum is what stands between
+// a caller and a corrupt record. Use decodeRecord for input that has not
+// been checksummed.
+func decodeRecordFields(src []byte) Record {
 	src = src[:RecordSize:RecordSize]
 
-	rec := Record{
+	return Record{
 		ExchangeTs:     int64(binary.LittleEndian.Uint64(src[offExchangeTs:])),
 		SequenceNumber: binary.LittleEndian.Uint64(src[offSequenceNumber:]),
 		InstrumentID:   binary.LittleEndian.Uint32(src[offInstrumentID:]),
@@ -181,12 +181,22 @@ func decodeRecord(src []byte) (Record, error) {
 		BlobLen:        binary.LittleEndian.Uint32(src[offBlobLen:]),
 		LevelCount:     binary.LittleEndian.Uint16(src[offLevelCount:]),
 	}
+}
 
+// decodeRecord reads one record from the first RecordSize bytes of src.
+// It returns ErrShortRecord if src is too small, and a typed error if any
+// byte of the record is undefined by this format version.
+func decodeRecord(src []byte) (Record, error) {
+	if len(src) < RecordSize {
+		return Record{}, ErrShortRecord
+	}
 	for _, b := range src[offReserved : offReserved+lenReserved] {
 		if b != 0 {
 			return Record{}, ErrReserved
 		}
 	}
+
+	rec := decodeRecordFields(src)
 	if err := validateRecord(rec); err != nil {
 		return Record{}, err
 	}
