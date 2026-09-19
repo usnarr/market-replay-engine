@@ -31,4 +31,9 @@ var (
 	ErrIndexOrder = errors.New("store: index entries are not in order")
 	ErrIndexRange = errors.New("store: index entry names a record that does not exist")
 	ErrIndexCount = errors.New("store: index entry count does not match the record array")
+
+	ErrShortFooter    = errors.New("store: footer region shorter than its entry count")
+	ErrFooterGeometry = errors.New("store: footer entry does not start where its block does")
+	ErrBlockRange     = errors.New("store: block index out of range")
+	ErrBlockChecksum  = errors.New("store: block checksum mismatch")
 )
