@@ -52,14 +52,15 @@ func TestValidateHeader(t *testing.T) {
 		}
 	})
 
-	t.Run("a_file_longer_than_its_regions_validates", func(t *testing.T) {
-		// Trailing bytes are not this function's concern; a short file is.
+	t.Run("a_file_longer_than_its_regions_is_rejected", func(t *testing.T) {
+		// A file is exactly its regions. Trailing bytes would let two
+		// different byte strings be the same file.
 		h, fileLen := finalizedHeader()
 
-		err := validateHeader(h, fileLen+4096)
+		err := validateHeader(h, fileLen+1)
 
-		if err != nil {
-			t.Errorf("validateHeader() error = %v, want nil", err)
+		if !errors.Is(err, ErrOffsetChain) {
+			t.Errorf("validateHeader() error = %v, want %v", err, ErrOffsetChain)
 		}
 	})
 

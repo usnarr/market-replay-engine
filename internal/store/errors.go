@@ -10,13 +10,14 @@ var (
 	ErrShortRecord    = errors.New("store: buffer shorter than one record")
 	ErrRecordType     = errors.New("store: unknown record type")
 	ErrSideFlags      = errors.New("store: side_flags sets a reserved bit")
-	ErrReserved       = errors.New("store: reserved bytes are not zero")
+	ErrReserved       = errors.New("store: a byte undefined by this format version is set")
 	ErrUnusedFieldSet = errors.New("store: a field unused by this record type is not zero")
 	ErrBlobLen        = errors.New("store: blob_len and level_count disagree")
 
 	ErrShortHeader = errors.New("store: buffer shorter than the header fields")
 	ErrBadMagic    = errors.New("store: not a replay hot-tier file")
 	ErrHeaderCRC   = errors.New("store: header checksum mismatch")
+	ErrTrailerCRC  = errors.New("store: index and footer checksum mismatch")
 	ErrPageSize    = errors.New("store: unusable page size")
 
 	ErrFormatVersion = errors.New("store: unsupported format version")

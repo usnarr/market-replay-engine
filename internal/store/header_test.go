@@ -30,6 +30,7 @@ func goldenHeader() header {
 		SnapshotIndexOffset: 4096 + 1024*RecordSize + 168 + 16,
 		SnapshotIndexCount:  3,
 		FooterOffset:        4096 + 1024*RecordSize + 168 + 16 + 24,
+		TrailerCRC:          0xDEADBEEF,
 	}
 }
 
@@ -71,7 +72,8 @@ func TestHeaderFieldOffsets(t *testing.T) {
 		{"snapshot_index_offset", 88, le64(69816)},
 		{"snapshot_index_count", 96, le64(3)},
 		{"footer_offset", 104, le64(69840)},
-		{"reserved2", 112, make([]byte, 8)},
+		{"trailer_crc32c", 112, le32(0xDEADBEEF)},
+		{"reserved2", 116, make([]byte, 4)},
 		{"finalized", 120, []byte{0}},
 		{"reserved3", 121, make([]byte, 3)},
 	}

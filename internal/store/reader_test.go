@@ -19,6 +19,18 @@ func fixHeaderCRC(b []byte) {
 	binary.LittleEndian.PutUint32(b[hdrOffCRC:], crc32.Checksum(b[:headerCRCLen], castagnoli))
 }
 
+// fixTrailerCRC recomputes the trailer checksum, and then the header
+// checksum that covers it, after a test mutates an index or the footer.
+func fixTrailerCRC(tb testing.TB, b []byte) {
+	tb.Helper()
+	h, err := decodeHeader(b)
+	if err != nil {
+		tb.Fatalf("decodeHeader() while repairing the trailer: %v", err)
+	}
+	binary.LittleEndian.PutUint32(b[hdrOffTrailerCRC:], crc32.Checksum(b[h.TimeIndexOffset:], castagnoli))
+	fixHeaderCRC(b)
+}
+
 // fixture is a small file with deltas, two snapshots, and a repeated
 // timestamp, written with a block size of 2 so block boundaries are easy
 // to reach.
@@ -322,6 +334,26 @@ func TestOpenRejects(t *testing.T) {
 		want error
 	}{
 		{
+			name: "a_time_index_byte_flipped",
+			mut: func(b []byte) []byte {
+				// Nothing else covers the indexes or the footer: the
+				// block checksums cover only the record array.
+				h, _ := decodeHeader(b)
+				b[h.TimeIndexOffset] ^= 0x01
+				return b
+			},
+			want: ErrTrailerCRC,
+		},
+		{
+			name: "a_footer_byte_flipped",
+			mut: func(b []byte) []byte {
+				h, _ := decodeHeader(b)
+				b[h.FooterOffset] ^= 0x01
+				return b
+			},
+			want: ErrTrailerCRC,
+		},
+		{
 			name: "an_empty_file",
 			mut:  func([]byte) []byte { return nil },
 			want: ErrShortHeader,
@@ -355,6 +387,7 @@ func TestOpenRejects(t *testing.T) {
 			mut: func(b []byte) []byte {
 				h, _ := decodeHeader(b)
 				b[h.SnapshotIndexOffset] = byte(h.RecordCount)
+				fixTrailerCRC(t, b)
 				return b
 			},
 			want: ErrIndexRange,
@@ -364,6 +397,7 @@ func TestOpenRejects(t *testing.T) {
 			mut: func(b []byte) []byte {
 				h, _ := decodeHeader(b)
 				b[h.TimeIndexOffset+indexEntrySize] = 0
+				fixTrailerCRC(t, b)
 				return b
 			},
 			want: ErrIndexOrder,

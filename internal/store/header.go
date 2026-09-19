@@ -37,7 +37,8 @@ const (
 	hdrOffSnapshotIndexOffset = 88
 	hdrOffSnapshotIndexCount  = 96
 	hdrOffFooterOffset        = 104
-	hdrOffReserved2           = 112
+	hdrOffTrailerCRC          = 112
+	hdrOffReserved2           = 116
 	hdrOffFinalized           = 120
 	hdrOffReserved3           = 121
 	hdrOffCRC                 = 124
@@ -70,6 +71,7 @@ type header struct {
 	SnapshotIndexOffset uint64
 	SnapshotIndexCount  uint64
 	FooterOffset        uint64
+	TrailerCRC          uint32
 	Finalized           bool
 }
 
@@ -169,37 +171,43 @@ func validateHeader(h header, fileLen uint64) error {
 		return ErrIndexCount
 	}
 
-	// Walk the region chain once, forwards. Each step checks that the
-	// region starts at or after the previous one ended, then that its own
-	// extent does not overflow. Addition is always written as a
-	// subtraction against the remaining headroom, never as a + b.
+	// Walk the region chain once, forwards. Each region starts exactly
+	// where the previous one ended, and the footer ends exactly at the
+	// end of the file. Merely requiring the offsets to increase would let
+	// two different byte strings describe the same file — gaps and
+	// trailing bytes that nothing reads — which breaks the
+	// byte-identical-artifact guarantee cmd/convert depends on.
+	//
+	// Every extent is written as a subtraction against the remaining
+	// headroom, never as a + b, so a hostile header cannot wrap uint64
+	// into a region that looks valid.
 	end := uint64(h.HeaderSize)
 	if h.RecordCount > (^uint64(0)-end)/RecordSize {
 		return ErrRecordCount
 	}
 	end += h.RecordCount * RecordSize
 
-	if h.BlobRegionOffset < end || h.BlobRegionLen > ^uint64(0)-h.BlobRegionOffset {
+	if h.BlobRegionOffset != end || h.BlobRegionLen > ^uint64(0)-end {
 		return ErrOffsetChain
 	}
-	end = h.BlobRegionOffset + h.BlobRegionLen
+	end += h.BlobRegionLen
 
-	if h.TimeIndexOffset < end || h.TimeIndexCount > (^uint64(0)-h.TimeIndexOffset)/indexEntrySize {
+	if h.TimeIndexOffset != end || h.TimeIndexCount > (^uint64(0)-end)/indexEntrySize {
 		return ErrOffsetChain
 	}
-	end = h.TimeIndexOffset + h.TimeIndexCount*indexEntrySize
+	end += h.TimeIndexCount * indexEntrySize
 
-	if h.SnapshotIndexOffset < end || h.SnapshotIndexCount > (^uint64(0)-h.SnapshotIndexOffset)/indexEntrySize {
+	if h.SnapshotIndexOffset != end || h.SnapshotIndexCount > (^uint64(0)-end)/indexEntrySize {
 		return ErrOffsetChain
 	}
-	end = h.SnapshotIndexOffset + h.SnapshotIndexCount*indexEntrySize
+	end += h.SnapshotIndexCount * indexEntrySize
 
-	if h.FooterOffset < end || blocks > (^uint64(0)-h.FooterOffset)/footerEntrySize {
+	if h.FooterOffset != end || blocks > (^uint64(0)-end)/footerEntrySize {
 		return ErrOffsetChain
 	}
-	end = h.FooterOffset + blocks*footerEntrySize
+	end += blocks * footerEntrySize
 
-	if end > fileLen {
+	if end != fileLen {
 		return ErrOffsetChain
 	}
 	return nil
@@ -229,8 +237,31 @@ func encodeHeader(dst []byte, h header) {
 	binary.LittleEndian.PutUint64(dst[hdrOffSnapshotIndexOffset:], h.SnapshotIndexOffset)
 	binary.LittleEndian.PutUint64(dst[hdrOffSnapshotIndexCount:], h.SnapshotIndexCount)
 	binary.LittleEndian.PutUint64(dst[hdrOffFooterOffset:], h.FooterOffset)
+	binary.LittleEndian.PutUint32(dst[hdrOffTrailerCRC:], h.TrailerCRC)
 
 	binary.LittleEndian.PutUint32(dst[hdrOffCRC:], crc32.Checksum(dst[:headerCRCLen], castagnoli))
+}
+
+// checkHeaderUndefinedBytes rejects a header holding any byte value this
+// version does not define. Without it two headers that mean the same
+// thing could differ in bytes nothing reads, and decode-then-encode
+// would stop reproducing the input.
+func checkHeaderUndefinedBytes(src []byte) error {
+	if src[hdrOffFinalized] > 1 {
+		return ErrReserved
+	}
+	for _, r := range [][2]int{
+		{hdrOffReserved1, hdrOffPriceScale},
+		{hdrOffReserved2, hdrOffFinalized},
+		{hdrOffReserved3, hdrOffCRC},
+	} {
+		for _, b := range src[r[0]:r[1]] {
+			if b != 0 {
+				return ErrReserved
+			}
+		}
+	}
+	return nil
 }
 
 // decodeHeader reads the header fields from the start of src. It checks
@@ -247,6 +278,9 @@ func decodeHeader(src []byte) (header, error) {
 	}
 	if binary.LittleEndian.Uint32(src[hdrOffCRC:]) != crc32.Checksum(src[:headerCRCLen], castagnoli) {
 		return header{}, ErrHeaderCRC
+	}
+	if err := checkHeaderUndefinedBytes(src); err != nil {
+		return header{}, err
 	}
 
 	return header{
@@ -265,6 +299,7 @@ func decodeHeader(src []byte) (header, error) {
 		SnapshotIndexOffset: binary.LittleEndian.Uint64(src[hdrOffSnapshotIndexOffset:]),
 		SnapshotIndexCount:  binary.LittleEndian.Uint64(src[hdrOffSnapshotIndexCount:]),
 		FooterOffset:        binary.LittleEndian.Uint64(src[hdrOffFooterOffset:]),
+		TrailerCRC:          binary.LittleEndian.Uint32(src[hdrOffTrailerCRC:]),
 		Finalized:           src[hdrOffFinalized] == 1,
 	}, nil
 }

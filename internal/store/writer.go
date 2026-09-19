@@ -292,6 +292,12 @@ func (w *Writer) finish() error {
 	encodeFooter(tail[n:], w.footer)
 	w.hdr.FooterOffset = w.pos + uint64(n)
 
+	// The block checksums cover the record array and each blob carries
+	// its own, but nothing covered the two indexes or the footer itself.
+	// One checksum over all three closes that gap: the header checksum
+	// protects this value, and this value protects the trailer.
+	w.hdr.TrailerCRC = crc32.Checksum(tail, castagnoli)
+
 	if _, err := w.f.Write(tail); err != nil {
 		return err
 	}

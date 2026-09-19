@@ -71,6 +71,15 @@ func openBytes(data []byte) (*Reader, error) {
 		return nil, err
 	}
 
+	// The trailer is small and read in full below, so checking it here
+	// costs nothing extra and makes the integrity chain complete: the
+	// header checksum covers this value, this value covers both indexes
+	// and the footer, the footer covers the record array a block at a
+	// time, and each blob covers itself.
+	if crc32.Checksum(data[h.TimeIndexOffset:], castagnoli) != h.TrailerCRC {
+		return nil, ErrTrailerCRC
+	}
+
 	recStart := uint64(h.HeaderSize)
 	r := &Reader{
 		data:    data,
@@ -216,6 +225,10 @@ func (r *Reader) AppendLevels(dst []Level, rec Record) ([]Level, int, error) {
 // search below finds the first index entry at or after t instead, which
 // makes the previous entry strictly earlier than t and bounds the scan
 // to that block plus one record.
+//
+// The answer means something only for a file whose blocks verify. The
+// index is trusted, and a record array that contradicts it is
+// corruption, which is what VerifyBlock is for.
 func (r *Reader) SeekTime(t int64) (int, error) {
 	n := r.Len()
 	if n == 0 {

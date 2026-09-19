@@ -1,3 +1,7 @@
 # Golden fixtures are byte-exact. Without this, git on Windows converts
 # their line endings on checkout and every round-trip test fails there.
 testdata/format/golden/** binary
+
+# Go writes fuzz corpus files with LF and parses them the same way. A
+# CRLF checkout makes go test fail to read its own corpus on Windows.
+internal/store/testdata/fuzz/** -text
