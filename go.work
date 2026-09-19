@@ -4,4 +4,5 @@ use (
 	.
 	./cmd/convert
 	./cmd/catalogue
+	./cmd/lint-determinism
 )
