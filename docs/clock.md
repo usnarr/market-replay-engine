@@ -28,4 +28,10 @@ Every time value is a UnixNano `int64`, not a `time.Time`. `time.Time` is 24 byt
 
 A `Clock` implementation changes only *when* a record is delivered. It never changes which records exist, their order, or their fields. This split is what lets the determinism suite run entirely under `SimClock` — which never sleeps in real time — while a separate, much smaller set of `RealClock`-based tests proves the pacing arithmetic is correct. See `TestDeterminism` in `internal/merge` and `internal/fanout` for the content side of this split, once those packages exist.
 
-`RealClock` and `SimClock`, the two implementations, are documented below once each one lands in code.
+## `RealClock`
+
+`internal/clock.RealClock` is the **only** place `time.Now()` appears in the repository. `cmd/lint-determinism`'s `no-time-now` rule enforces this by allowlisting exactly one file, `internal/clock/realclock.go`, and flagging `time.Now`, `time.Since`, `time.After`, `time.Tick`, `time.Sleep`, `time.NewTimer`, and `time.NewTicker` everywhere else, including test files in this same package.
+
+`RealClock.NewTimer` wraps `time.AfterFunc`, not `time.NewTimer`. A bare `*time.Timer`'s channel carries `time.Time`, not `int64`, and converting it would need a forwarding goroutine that then has to reimplement `Stop`/`Reset` bookkeeping and the stale-value drain the standard library already provides for `AfterFunc` timers. The callback sends the real fire time into a capacity-1 channel; `Reset` and `Stop` drain that channel non-blockingly before delegating to the underlying `*time.Timer`. `Stop`'s return value has the same caveat as the standard library's: it reports whether it prevented the callback from running, but a value can still be pending on the channel if the callback had already fired.
+
+`SimClock`, the other implementation, is documented below once it lands in code.
