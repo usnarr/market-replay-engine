@@ -29,4 +29,6 @@ import "golang.org/x/tools/go/analysis"
 // allAnalyzers is the full set of determinism rules, wired into the
 // multichecker in main.go and into the analysistest suite in
 // analyzer_test.go.
-var allAnalyzers = []*analysis.Analyzer{}
+var allAnalyzers = []*analysis.Analyzer{
+	NoTimeNow,
+}
