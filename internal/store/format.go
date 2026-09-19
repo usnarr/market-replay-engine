@@ -1,16 +1,8 @@
-// Package store implements the hot-tier binary format: the fixed-stride
-// record array, the page-aligned header, the sparse time index, the
-// snapshot position index, the per-block checksums, the sidecar blob
-// region, and the canonical hash projection the determinism test reads.
-// See docs/format.md for the layout and the reasoning behind it.
-//
-// Every field is encoded and decoded explicitly, one at a time, with
-// encoding/binary's LittleEndian functions. Never unsafe-cast a Go struct
-// onto the file bytes, and never use binary.Read or binary.Write: the
-// first lets compiler-inserted struct padding into the file, and the
-// second uses reflection and allocates. Either one would put bytes into a
-// file that no part of this package defines, and the canonical hash over
-// that file is the product's core claim.
+// Package store reads and writes the hot-tier binary format. A file
+// holds one venue's records at a fixed stride, with the indexes,
+// checksums and snapshot blobs a replay needs to seek into it. See
+// docs/format.md for the layout, the integrity chain, and why every
+// field is encoded one at a time rather than cast from a struct.
 package store
 
 import "encoding/binary"
