@@ -156,6 +156,10 @@ func (r *Ring) Subscribe(mode BackpressureMode, start StartAt) (*Subscriber, err
 		// buffer on what is otherwise a zero-allocation path.
 		s.blobBuf = make([]byte, 0, r.maxBlob)
 	}
+
+	if mode == ModeBlock {
+		r.blocking = append(r.blocking, s)
+	}
 	return s, nil
 }
 

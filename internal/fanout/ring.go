@@ -68,6 +68,12 @@ type Ring struct {
 	writeSeq atomic.Uint64
 	end      atomic.Uint64
 	hasEnd   atomic.Bool
+
+	// blocking is every registered Block subscriber, in registration
+	// order, used by the min-cursor barrier. Subscribe appends to it
+	// directly; see subscriber.go's doc comment on Subscribe for why
+	// that is safe before a later commit's lifecycle exists.
+	blocking []*Subscriber
 }
 
 // NewRing returns a Ring with the given configuration. The arena is
@@ -123,6 +129,8 @@ func (r *Ring) Write(rec store.Record, blob []byte) (uint64, error) {
 	}
 
 	n := r.writeSeq.Load()
+	r.waitForBlockBarrier(n)
+
 	i := n & r.mask
 	sl := &r.slots[i]
 
