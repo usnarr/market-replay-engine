@@ -20,7 +20,32 @@ _No measurements yet. First entry lands with the M4 checkpoint in `internal/merg
 
 ## Fan-out throughput
 
-_No measurements yet. First entry lands with M6 in `internal/fanout`._
+Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th Gen Intel Core i7-11370H @ 3.30GHz.
+
+| Date | Commit | Change | Before | After | Profile |
+|---|---|---|---|---|---|
+| 2026-09-20 | (this commit) | M6: shared ring, atomic-word slot | — | see below | — |
+
+```
+BenchmarkRingWrite/no_blob-8               56.87 ns/op   0 B/op   0 allocs/op
+BenchmarkRingWrite/with_a_snapshot_blob-8 100.20 ns/op   0 B/op   0 allocs/op
+BenchmarkRingRead-8                        15.39 ns/op   0 B/op   0 allocs/op
+```
+
+The ring's slot payload is atomic words, not a plain struct: a Drop subscriber may
+copy a slot the writer is concurrently overwriting, and a plain field there is a
+genuine data race, not a false positive, under `go test -race`. The measured cost of
+that choice is the ten sequentially-consistent stores `BenchmarkRingWrite/no_blob`
+pays per record (`store.EncodeRecord` plus eight word stores plus the two `seq`
+publishes) against a plain-struct assignment's one. Reads pay nothing extra on amd64:
+`atomic.Uint64.Load` compiles to a plain `MOV`. See `docs/backpressure.md`.
+
+Two profile-gated optimisations are deliberately not built yet, per the project's
+profile-first rule: dropping to 7 slot words (wire bytes 56-63 of a `store.Record`
+are always reserved zeros), and skipping the atomic path entirely when the
+subscriber set holds no Drop subscriber (the Block barrier then already guarantees
+exclusivity). Revisit only if a profile shows ring writes are the pipeline's
+bottleneck.
 
 ## Encode/decode throughput
 
