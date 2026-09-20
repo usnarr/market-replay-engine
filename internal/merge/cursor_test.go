@@ -231,6 +231,112 @@ func TestCursor(t *testing.T) {
 	})
 }
 
+func TestCursorSeekTime(t *testing.T) {
+	// Three files so a seek target can land before the first file, on a
+	// boundary between two files, and inside the last one, exercising
+	// the whole-file skip as well as the sparse-index lookup inside a
+	// file.
+	day1 := deltaRecords(3, 100, 0, 4) // ts 100..103
+	day2 := deltaRecords(3, 200, 4, 4) // ts 200..203
+	day3 := deltaRecords(3, 300, 8, 4) // ts 300..303
+	all := append(append(append([]store.Record{}, day1...), day2...), day3...)
+
+	newSeekCursor := func(t *testing.T) *Cursor {
+		return newCursorOver(t, 3,
+			writeVenueFile(t, "day1.bin", 3, day1),
+			writeVenueFile(t, "day2.bin", 3, day2),
+			writeVenueFile(t, "day3.bin", 3, day3))
+	}
+
+	tests := []struct {
+		name string
+		t    int64
+		want []store.Record
+	}{
+		{name: "before_every_record", t: 0, want: all},
+		{name: "exactly_the_first_timestamp", t: 100, want: all},
+		{name: "between_two_records_in_the_first_file", t: 101, want: all[1:]},
+		{name: "exactly_a_later_files_first_timestamp", t: 200, want: all[4:]},
+		{name: "between_two_files", t: 150, want: all[4:]},
+		{name: "inside_the_last_file", t: 301, want: all[9:]},
+		{name: "exactly_the_last_timestamp", t: 303, want: all[11:]},
+		{name: "past_every_record", t: 304, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newSeekCursor(t)
+
+			if err := c.SeekTime(tt.t); err != nil {
+				t.Fatalf("SeekTime(%d) error = %v, want nil", tt.t, err)
+			}
+			got, err := drainCursor(t, c)
+
+			if err != nil {
+				t.Fatalf("Next() error = %v, want nil", err)
+			}
+			if diff := cmp.Diff(tt.want, got, cmpEmptyRecordSlices); diff != "" {
+				t.Errorf("SeekTime(%d) suffix mismatch (-want +got):\n%s", tt.t, diff)
+			}
+		})
+	}
+
+	t.Run("seeking_an_empty_partition_yields_nothing", func(t *testing.T) {
+		c := newCursorOver(t, 3)
+
+		if err := c.SeekTime(1000); err != nil {
+			t.Fatalf("SeekTime() error = %v, want nil", err)
+		}
+		got, err := drainCursor(t, c)
+
+		if err != nil {
+			t.Fatalf("Next() error = %v, want nil", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("read %d records, want 0", len(got))
+		}
+	})
+
+	t.Run("seeking_past_a_whole_empty_file", func(t *testing.T) {
+		c := newCursorOver(t, 3,
+			writeVenueFile(t, "day1.bin", 3, day1),
+			writeVenueFile(t, "day2.bin", 3, nil),
+			writeVenueFile(t, "day3.bin", 3, day3))
+
+		if err := c.SeekTime(250); err != nil {
+			t.Fatalf("SeekTime() error = %v, want nil", err)
+		}
+		got, err := drainCursor(t, c)
+
+		if err != nil {
+			t.Fatalf("Next() error = %v, want nil", err)
+		}
+		if diff := cmp.Diff(day3, got); diff != "" {
+			t.Errorf("suffix mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("calling_it_after_next_panics", func(t *testing.T) {
+		c := newSeekCursor(t)
+		if _, _, err := c.Next(); err != nil {
+			t.Fatalf("Next() error = %v, want nil", err)
+		}
+
+		defer func() {
+			if recover() == nil {
+				t.Error("SeekTime() after Next did not panic")
+			}
+		}()
+		_ = c.SeekTime(200)
+	})
+}
+
+// cmpEmptyRecordSlices treats a nil and an empty record slice as equal.
+var cmpEmptyRecordSlices = cmp.FilterValues(
+	func(a, b []store.Record) bool { return len(a) == 0 && len(b) == 0 },
+	cmp.Comparer(func(a, b []store.Record) bool { return true }),
+)
+
 func TestCursorRejectsBrokenOrderingAcrossAFileBoundary(t *testing.T) {
 	// Each file is in order on its own, so the writer accepts both. The
 	// boundary is the one place a per-file check cannot see the problem,

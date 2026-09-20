@@ -189,11 +189,18 @@ type venueFeed struct {
 	perturb func()
 }
 
+// newVenueFeed builds a feed over c's files, starting from c's current
+// position rather than always from the beginning. That is what makes a
+// seek applied to c before the merge is constructed take effect on the
+// concurrent path too: this is the only thing that reads c.file and
+// c.index, since the concurrent path never calls c.Next.
 func newVenueFeed(c *Cursor, abort *atomic.Bool) *venueFeed {
 	f := &venueFeed{
 		venueID: c.venueID,
 		readers: c.readers,
 		abort:   abort,
+		file:    c.file,
+		index:   c.index,
 		ch:      make(chan *batch),
 		free:    make(chan *batch, feedBatches),
 	}

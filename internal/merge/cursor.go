@@ -50,6 +50,39 @@ func NewCursor(venueID uint16, readers []*store.Reader) (*Cursor, error) {
 // VenueID returns the venue every record in this partition belongs to.
 func (c *Cursor) VenueID() uint16 { return c.venueID }
 
+// SeekTime advances the cursor to the first record at or after t, using
+// each file's own sparse time index rather than scanning from the
+// start. exchange_ts is non-decreasing within one venue (Q1 in
+// plans/16-open-questions.md, enforced by the converter at write time),
+// so the records this skips are always a contiguous run at the front of
+// the partition — never something spread through it — which is what
+// makes draining the cursor from here on an exact suffix of draining it
+// from the beginning.
+//
+// Call it before the first Next; calling it after is a caller error,
+// because Next may already have advanced past what a later seek target
+// would land on.
+func (c *Cursor) SeekTime(t int64) error {
+	if c.hasLast {
+		panic("merge: SeekTime called after Next")
+	}
+	for c.file < len(c.readers) {
+		r := c.readers[c.file]
+		idx, err := r.SeekTime(t)
+		if err != nil {
+			return err
+		}
+		if idx < r.Len() {
+			c.index = idx
+			return nil
+		}
+		// Every record in this file is before t: the whole file is
+		// skipped, the same way Next's own exhaustion loop moves on.
+		c.file++
+	}
+	return nil
+}
+
 // Next returns the partition's next event, reporting false once it is
 // exhausted. It returns ErrDuplicateKey or ErrOutOfOrder if the key does
 // not strictly follow the one before it, and a store error if the block
