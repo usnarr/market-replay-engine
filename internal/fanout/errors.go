@@ -11,4 +11,7 @@ var (
 	ErrCapacity     = errors.New("fanout: ring capacity must be a power of two of at least two")
 	ErrMaxBlobBytes = errors.New("fanout: max blob bytes must not be negative")
 	ErrBlobTooLarge = errors.New("fanout: snapshot blob is larger than the ring's configured max blob bytes")
+	ErrModeUnset    = errors.New("fanout: backpressure mode must be Block or Drop")
+	ErrStartUnset   = errors.New("fanout: start position must be set")
+	ErrStartLapped  = errors.New("fanout: a Block subscriber cannot start before the oldest record still in the ring")
 )

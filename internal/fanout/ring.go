@@ -66,6 +66,8 @@ type Ring struct {
 	blobs     []atomic.Uint64
 
 	writeSeq atomic.Uint64
+	end      atomic.Uint64
+	hasEnd   atomic.Bool
 }
 
 // NewRing returns a Ring with the given configuration. The arena is
@@ -94,6 +96,21 @@ func (r *Ring) Capacity() int { return int(r.mask) + 1 }
 
 // WriteIndex returns the next emit index Write will assign.
 func (r *Ring) WriteIndex() uint64 { return r.writeSeq.Load() }
+
+// SetEnd marks the ring's end at index end: no further Write call will
+// ever happen. It is set once, by the single writer goroutine once the
+// merge it is draining reports a clean end of stream, and read by every
+// subscriber's Next to tell "wait for more" apart from "the stream is
+// over."
+func (r *Ring) SetEnd(end uint64) {
+	r.end.Store(end)
+	r.hasEnd.Store(true)
+}
+
+// End reports the ring's end index and whether SetEnd has been called.
+func (r *Ring) End() (uint64, bool) {
+	return r.end.Load(), r.hasEnd.Load()
+}
 
 // Write publishes rec, and blob when rec is a snapshot pointer, at the
 // next emit index, and returns that index. Write is not safe for
