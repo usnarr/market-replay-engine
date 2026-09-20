@@ -13,7 +13,7 @@ import (
 func makeRecordBytes(n int) []byte {
 	buf := make([]byte, n*RecordSize)
 	for i := 0; i < n; i++ {
-		encodeRecord(buf[i*RecordSize:], Record{
+		EncodeRecord(buf[i*RecordSize:], Record{
 			ExchangeTs:     int64(1000 + i),
 			SequenceNumber: uint64(i),
 			InstrumentID:   1,

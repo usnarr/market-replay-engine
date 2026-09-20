@@ -130,11 +130,15 @@ func validateRecord(rec Record) error {
 	return nil
 }
 
-// encodeRecord writes rec into the first RecordSize bytes of dst, and
+// EncodeRecord writes rec into the first RecordSize bytes of dst, and
 // panics if dst is shorter. It writes every byte, including explicit
 // zeroes for the reserved range, so the result never depends on what dst
 // held before. Callers validate rec first; this function does not.
-func encodeRecord(dst []byte, rec Record) {
+//
+// Exported so internal/fanout's ring can stage a record into the same
+// fixed-stride wire form before publishing it as atomic words, reusing
+// this format's one encoding rather than defining a second one.
+func EncodeRecord(dst []byte, rec Record) {
 	dst = dst[:RecordSize:RecordSize]
 
 	binary.LittleEndian.PutUint64(dst[offExchangeTs:], uint64(rec.ExchangeTs))
@@ -151,13 +155,17 @@ func encodeRecord(dst []byte, rec Record) {
 	clear(dst[offReserved : offReserved+lenReserved])
 }
 
-// decodeRecordFields reads one record's fields from the first RecordSize
+// DecodeRecordFields reads one record's fields from the first RecordSize
 // bytes of src and panics if src is shorter. It checks nothing: it is
 // the reader's hot path, where a per-record validation branch would cost
 // more than it buys and where the block checksum is what stands between
 // a caller and a corrupt record. Use decodeRecord for input that has not
 // been checksummed.
-func decodeRecordFields(src []byte) Record {
+//
+// Exported for the same reason as EncodeRecord: internal/fanout's ring
+// decodes a slot's atomic words back into a Record through this one
+// function.
+func DecodeRecordFields(src []byte) Record {
 	src = src[:RecordSize:RecordSize]
 
 	return Record{
@@ -188,7 +196,7 @@ func decodeRecord(src []byte) (Record, error) {
 		}
 	}
 
-	rec := decodeRecordFields(src)
+	rec := DecodeRecordFields(src)
 	if err := validateRecord(rec); err != nil {
 		return Record{}, err
 	}

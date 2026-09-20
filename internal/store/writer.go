@@ -222,7 +222,7 @@ func (w *Writer) append(rec Record) error {
 		w.timeIndex = append(w.timeIndex, rec.ExchangeTs)
 	}
 
-	encodeRecord(w.buf[:], rec)
+	EncodeRecord(w.buf[:], rec)
 	if _, err := w.bw.Write(w.buf[:]); err != nil {
 		return err
 	}

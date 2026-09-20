@@ -70,7 +70,7 @@ func fuzzRecord(t *testing.T, data []byte) {
 	}
 
 	var buf [RecordSize]byte
-	encodeRecord(buf[:], rec)
+	EncodeRecord(buf[:], rec)
 
 	if !bytes.Equal(buf[:], data[:RecordSize]) {
 		t.Fatalf("decode then encode changed the bytes\n got: %x\nwant: %x", buf[:], data[:RecordSize])

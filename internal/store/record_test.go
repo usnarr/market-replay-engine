@@ -132,10 +132,10 @@ func TestRecordGolden(t *testing.T) {
 				buf[i] = 0xAB
 			}
 
-			encodeRecord(buf[:], g.rec)
+			EncodeRecord(buf[:], g.rec)
 
 			if diff := cmp.Diff(g.buf, buf[:]); diff != "" {
-				t.Errorf("encodeRecord() mismatch (-want +got):\n%s", diff)
+				t.Errorf("EncodeRecord() mismatch (-want +got):\n%s", diff)
 			}
 		})
 
@@ -248,7 +248,7 @@ func TestRecordRoundTrip(t *testing.T) {
 		t.Run(g.name, func(t *testing.T) {
 			var buf [RecordSize]byte
 
-			encodeRecord(buf[:], g.rec)
+			EncodeRecord(buf[:], g.rec)
 			got, err := decodeRecord(buf[:])
 
 			if err != nil {
@@ -256,6 +256,26 @@ func TestRecordRoundTrip(t *testing.T) {
 			}
 			if diff := cmp.Diff(g.rec, got); diff != "" {
 				t.Errorf("round trip mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestExportedCodecRoundTrip exercises EncodeRecord and DecodeRecordFields
+// directly, with no decodeRecord validation step in between. This is
+// exactly the pair internal/fanout's ring calls to stage a record into a
+// slot and read it back, so the two must agree with each other even
+// though neither one validates.
+func TestExportedCodecRoundTrip(t *testing.T) {
+	for _, g := range goldenRecords {
+		t.Run(g.name+"_the_wire_form_round_trips_through_the_exported_codec", func(t *testing.T) {
+			var buf [RecordSize]byte
+
+			EncodeRecord(buf[:], g.rec)
+			got := DecodeRecordFields(buf[:])
+
+			if diff := cmp.Diff(g.rec, got); diff != "" {
+				t.Errorf("EncodeRecord/DecodeRecordFields round trip mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

@@ -36,7 +36,7 @@ func BenchmarkEncodeRecord(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		encodeRecord(buf[:], benchRecord)
+		EncodeRecord(buf[:], benchRecord)
 	}
 }
 
@@ -44,13 +44,13 @@ func BenchmarkEncodeRecord(b *testing.B) {
 // no error return.
 func BenchmarkDecodeRecordFields(b *testing.B) {
 	var buf [RecordSize]byte
-	encodeRecord(buf[:], benchRecord)
+	EncodeRecord(buf[:], benchRecord)
 	b.SetBytes(RecordSize)
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		sinkRecord = decodeRecordFields(buf[:])
+		sinkRecord = DecodeRecordFields(buf[:])
 	}
 }
 
@@ -58,7 +58,7 @@ func BenchmarkDecodeRecordFields(b *testing.B) {
 // not been through a block checksum.
 func BenchmarkDecodeRecord(b *testing.B) {
 	var buf [RecordSize]byte
-	encodeRecord(buf[:], benchRecord)
+	EncodeRecord(buf[:], benchRecord)
 	b.SetBytes(RecordSize)
 	b.ReportAllocs()
 	b.ResetTimer()

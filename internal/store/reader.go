@@ -143,7 +143,7 @@ func (r *Reader) RecordAt(i int) Record {
 	if i < 0 || i >= r.Len() {
 		panic("store: RecordAt index out of range")
 	}
-	return decodeRecordFields(r.records[i*RecordSize:])
+	return DecodeRecordFields(r.records[i*RecordSize:])
 }
 
 // Blob returns a snapshot's blob payload: the bid and ask counts
