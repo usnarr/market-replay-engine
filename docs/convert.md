@@ -1,6 +1,6 @@
 # The archive-tier converter
 
-Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, where it places snapshot epochs, what makes its artifacts byte-reproducible, and what it rejects rather than repairs.
+Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, where it places snapshot epochs, what makes its artifacts byte-reproducible, the content hash that identifies one, and what it rejects rather than repairs.
 
 See the root [`CLAUDE.md`](../CLAUDE.md) and the documentation index at [`CLAUDE.md`](./CLAUDE.md). The output format is [`format.md`](./format.md).
 
@@ -107,6 +107,16 @@ Three things make it true.
 **Every undefined byte is explicitly zeroed.** That is `internal/store`'s discipline, not this converter's, and `format.md`'s "every byte is defined" rule is what makes it checkable.
 
 `TestConvertIsByteReproducible` converts one source twice into two directories and compares the SHA-256 of every file. `TestConvertPinsTheArtifactLayout` reads `header_size` out of the header directly, because on a host whose page size is already 4096 the first test alone would pass even if the pin were removed.
+
+## The artifact content hash, and why it is a sidecar
+
+Each finished artifact gets a `<artifact>.hash` file holding its whole-file SHA-256 as lowercase hex and a newline — the digest alone, no file name, so nothing has to parse around a path that may since have moved. A run manifest carries this value, which is what scopes the project's determinism claim honestly: deterministic *given a fixed, identified artifact*, with that identity independently checkable by anyone who has the file.
+
+It is not the per-record `canonical_v1` projection `store.CanonicalSHA256` computes. That hash deliberately ignores where bytes sit in a file, so two conversions that pack blobs differently still match. This one is the opposite: it is about one file's exact bytes.
+
+**Not in the header.** The header has nine reserved bytes across three ranges, and `internal/store` validates every one of them as zero; 32 do not fit. Writing the digest into the zero padding past the 128 defined bytes would be worse: the hash would then cover itself, and "the hash of everything except this hash" is a different, weaker thing than "the hash of this file".
+
+`replayd` reads the sidecar if it is there and records an empty string if it is not. It never computes the digest itself — that would mean reading every dataset file in full at startup purely to write a manifest. An empty hash means "no converter stamped this file", which is the honest answer for a hand-written fixture or an `internal/synth` build, and the field is always serialized so that "none" reads differently from "not recorded".
 
 ## `exchange_ts` is checked, never repaired
 

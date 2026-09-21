@@ -94,7 +94,11 @@ func TestConvertPartitionsByVenueAndDay(t *testing.T) {
 	t.Run("the_output_directory_holds_nothing_else", func(t *testing.T) {
 		names := dirEntries(t, out)
 
-		wantNames := []string{"venue-7-2024-01-01.bin", "venue-7-2024-01-02.bin", "venue-9-2024-01-01.bin"}
+		wantNames := []string{
+			"venue-7-2024-01-01.bin", "venue-7-2024-01-01.bin.hash",
+			"venue-7-2024-01-02.bin", "venue-7-2024-01-02.bin.hash",
+			"venue-9-2024-01-01.bin", "venue-9-2024-01-01.bin.hash",
+		}
 		if !slices.Equal(names, wantNames) {
 			t.Errorf("the output directory holds %v, want %v", names, wantNames)
 		}

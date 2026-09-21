@@ -214,12 +214,16 @@ func (c *converter) partition(key PartitionKey) (*partition, error) {
 	return p, nil
 }
 
-// close finalizes every open file and returns their paths in partition
-// order.
+// close finalizes every open file, stamps each one's content hash into
+// its sidecar, and returns their paths in partition order.
 func (c *converter) close() ([]string, error) {
 	paths := make([]string, 0, len(c.parts))
 	for _, p := range c.parts {
 		if err := p.w.Close(); err != nil {
+			c.abort()
+			return nil, err
+		}
+		if _, err := WriteArtifactHash(p.path); err != nil {
 			c.abort()
 			return nil, err
 		}
@@ -228,11 +232,13 @@ func (c *converter) close() ([]string, error) {
 	return paths, nil
 }
 
-// abort discards every file this conversion created, finished or not.
+// abort discards every file this conversion created, finished or not,
+// and the sidecars of any it had already finished.
 func (c *converter) abort() {
 	for _, p := range c.parts {
 		_ = p.w.Abort()
 		_ = os.Remove(p.path)
+		_ = os.Remove(p.path + HashSuffix)
 	}
 	c.parts = nil
 }
