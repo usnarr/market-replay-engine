@@ -15,6 +15,15 @@ func TestAssertZero(t *testing.T) {
 		})
 		_ = x
 
+		// Under -race, AssertZero's own doc comment says it skips rather
+		// than measures, so res.N == 0 here is the correct outcome, not
+		// the failure the non-race branch below checks for.
+		if raceEnabled {
+			if res.N != 0 {
+				t.Fatalf("testing.Benchmark(...) ran %d iterations under -race, want 0: AssertZero should have skipped", res.N)
+			}
+			return
+		}
 		if res.N == 0 {
 			t.Fatal("testing.Benchmark(...) ran 0 iterations: AssertZero must have failed unexpectedly")
 		}
@@ -24,6 +33,14 @@ func TestAssertZero(t *testing.T) {
 		res := testing.Benchmark(func(b *testing.B) {
 			AssertZero(b, func() { sinkBytes = make([]byte, 64) })
 		})
+
+		// Under -race, AssertZero skips before it ever measures, so
+		// res.N == 0 here would hold regardless of whether the
+		// allocation was detected. That would pass this assertion for
+		// the wrong reason, so skip it instead.
+		if raceEnabled {
+			t.Skip("allocgate: skipped under -race, see AssertZero's own -race skip")
+		}
 
 		// AssertZero calls b.Fatalf when fn allocates. testing.Benchmark
 		// surfaces a failed run only as a zero-value BenchmarkResult —
