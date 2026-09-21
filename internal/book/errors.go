@@ -13,4 +13,16 @@ var (
 	// ErrDuplicateLevel is returned when a snapshot's decoded levels hold
 	// two entries at the same price on one side.
 	ErrDuplicateLevel = errors.New("book: snapshot has two levels at the same price on one side")
+
+	// ErrWrongRecordType is returned by Apply when rec is not a Delta
+	// record.
+	ErrWrongRecordType = errors.New("book: record is not a delta")
+
+	// ErrWrongInstrument is returned by Apply when rec's instrument does
+	// not match the Book it is applied to.
+	ErrWrongInstrument = errors.New("book: record instrument does not match the book")
+
+	// ErrBidCountOutOfRange is returned by ApplySnapshot when bidCount is
+	// negative or larger than the decoded level slice.
+	ErrBidCountOutOfRange = errors.New("book: bid count exceeds the decoded levels")
 )
