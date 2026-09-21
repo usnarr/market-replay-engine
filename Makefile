@@ -4,13 +4,14 @@
 .PHONY: test bench determinism profile lint fuzz proto
 
 # Full suite with -race. Covers internal/... and cmd/replayd, plus
-# cmd/lint-determinism (a separate module, run from inside its own
-# directory -- see plans/01-repo-and-toolchain.md). cmd/convert and
-# cmd/catalogue are separate modules too, still with no code worth
-# testing; extend this target once they have some.
+# cmd/lint-determinism and cmd/convert (separate modules, each run from
+# inside its own directory -- see plans/01-repo-and-toolchain.md).
+# cmd/catalogue is a separate module too, still with no code worth
+# testing; extend this target once it has some.
 test:
 	go test -race ./...
 	cd cmd/lint-determinism && go test -race ./...
+	cd cmd/convert && go test -race ./...
 
 # go test -bench -benchmem, never combined with -race: the race
 # detector's own instrumentation allocates and would fail the
@@ -82,6 +83,7 @@ lint:
 	staticcheck ./...
 	go run ./cmd/lint-determinism ./...
 	cd cmd/lint-determinism && go vet ./... && staticcheck ./...
+	cd cmd/convert && go vet ./... && staticcheck ./...
 
 # Fuzzes the binary record and header decoder. Short duration,
 # suitable for routine CI use; run a longer session periodically,
