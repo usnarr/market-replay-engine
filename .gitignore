@@ -1,5 +1,6 @@
 CLAUDE-02-replay-engine.md
 plans/
+worktrees/
 bench/results/
 testdata/large/
 *.prof
