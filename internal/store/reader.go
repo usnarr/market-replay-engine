@@ -188,9 +188,27 @@ func (r *Reader) AppendLevels(dst []Level, rec Record) ([]Level, int, error) {
 	if err != nil {
 		return dst, 0, err
 	}
+	return AppendLevelsFromPayload(dst, payload)
+}
+
+// AppendLevelsFromPayload is AppendLevels for a caller holding a copy of
+// the payload with no Reader to read it from: internal/fanout's ring
+// copies one into its own arena, so a subscriber has the bytes and not
+// the file (see docs/backpressure.md). It returns ErrBlobLen if payload
+// is not exactly a header plus a whole number of levels.
+func AppendLevelsFromPayload(dst []Level, payload []byte) ([]Level, int, error) {
+	const payloadHeaderSize = blobHeaderSize - 4 // the crc prefix is not part of the payload
+	if len(payload) < payloadHeaderSize {
+		return dst, 0, ErrBlobLen
+	}
 	bids := int(binary.LittleEndian.Uint16(payload[0:]))
-	for i := 0; i < int(rec.LevelCount); i++ {
-		off := 4 + i*levelSize
+	asks := int(binary.LittleEndian.Uint16(payload[2:]))
+	if len(payload) != payloadHeaderSize+(bids+asks)*levelSize {
+		return dst, 0, ErrBlobLen
+	}
+
+	for i := 0; i < bids+asks; i++ {
+		off := payloadHeaderSize + i*levelSize
 		dst = append(dst, Level{
 			Price: int64(binary.LittleEndian.Uint64(payload[off:])),
 			Size:  int64(binary.LittleEndian.Uint64(payload[off+8:])),
