@@ -30,7 +30,7 @@ Four things are outside it, each on purpose:
 
 `make determinism` runs every test whose name starts with `TestDeterminism`, in `internal/merge` and `internal/fanout`. Between them those tests vary the worker count over 1, 4, 16 and 64, vary `GOMAXPROCS`, rotate which loser-tree leaf each venue lands on, vary ring capacity from 2 (constant lapping) to larger than the dataset (no lapping at all), vary the Block/Drop subscriber mix, inject random scheduling delays into both the reader goroutines and the subscriber goroutines (`TestDeterminismChaos`), and assert an identical hash at 1× and 10,000× under `SimClock` (`TestDeterminismPacing`, whose exact reach is spelled out in [`clock.md`](./clock.md)).
 
-One part of the claim sits outside that name pattern: the seek-suffix property, that `replay(from=T)` is an exact suffix of `replay(from=0)`, is proved by `TestSeekSuffix`, `TestSeekSuffixWithTheWorkerPool` and `TestSeekSuffixAcrossVenueOrder` in `internal/merge`. They run in `make test`, not in `make determinism`. A test added to the claim should be named `TestDeterminism…` so both targets cover it.
+The seek-suffix property, that `replay(from=T)` is an exact suffix of `replay(from=0)`, is proved by `TestDeterminismSeekSuffix`, `TestDeterminismSeekSuffixWithTheWorkerPool` and `TestDeterminismSeekSuffixAcrossVenueOrder` in `internal/merge`. These were named `TestSeekSuffix*` until they were renamed to fit the `TestDeterminism…` prefix, which is what makes `make determinism`'s `-run TestDeterminism` pattern actually cover them, alongside `make test`.
 
 This suite is the project's core assertion. It is never skipped, weakened or made tolerant.
 
