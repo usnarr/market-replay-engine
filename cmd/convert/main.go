@@ -20,19 +20,21 @@ func main() {
 	in := flag.String("in", "", "source Parquet file, in the canonical source schema")
 	out := flag.String("out", "", "directory to write the hot-tier files into")
 	priceScale := flag.Int64("price-scale", defaultPriceScale, "power-of-ten divisor for every price and size")
+	epochEvery := flag.Int("epoch-every", DefaultEpochEvery, "snapshot epoch cadence, in records per venue")
 	flag.Parse()
 
-	if err := run(*in, *out, *priceScale); err != nil {
+	opts := Options{PriceScale: *priceScale, EpochEvery: *epochEvery}
+	if err := run(*in, *out, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "convert:", err)
 		os.Exit(1)
 	}
 }
 
-func run(in, out string, priceScale int64) error {
+func run(in, out string, opts Options) error {
 	if in == "" || out == "" {
 		return fmt.Errorf("-in and -out are both required")
 	}
-	paths, err := Convert(in, out, priceScale)
+	paths, err := Convert(in, out, opts)
 	if err != nil {
 		return err
 	}

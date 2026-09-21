@@ -1,6 +1,6 @@
 # The archive-tier converter
 
-Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, and what it rejects rather than repairs.
+Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, where it places snapshot epochs, and what it rejects rather than repairs.
 
 See the root [`CLAUDE.md`](../CLAUDE.md) and the documentation index at [`CLAUDE.md`](./CLAUDE.md). The output format is [`format.md`](./format.md).
 
@@ -65,6 +65,34 @@ Nothing is inferred from a near miss. A `float64` `price` column is not "close e
 A row whose values cannot become a `store.Record` is rejected the same way, with a `*RowError` carrying the row's ordinal in the source file and its ordering key: a `venue_id` that does not fit `uint16`, an undefined `record_type`, a reserved `side_flags` bit, levels on a row that is not a snapshot, a price or size on a row that is, and a level whose side is neither bid nor ask.
 
 A rejected conversion leaves nothing behind. Every file it had opened is aborted and removed, because a half-converted directory is worse than an empty one: nothing downstream can tell it from a complete conversion.
+
+## Snapshot epochs
+
+`format.md` requires the converter to emit, at each epoch, one snapshot pointer for every instrument active in the venue, at the same point in the record stream. `book.md` calls that contiguous run an epoch run, and `book.WarmUp` reads it. This is where those records come from.
+
+The converter keeps one `book.Book` per instrument per venue, folds every Delta record into it as it goes, and reloads it from any snapshot the source itself carries. A Trade changes no level, so it is not applied. The books live in a slice sorted by instrument ID, never a map: that order decides which sequence number each epoch record gets, and a map would make two conversions of the same input disagree.
+
+### Where an epoch lands, exactly
+
+The cadence is every `EpochEvery` records of one venue, 1000 by default. The cadence point is not where the epoch goes.
+
+When the cadence comes due, the converter waits for the first record whose `exchange_ts` is strictly greater than the record before it. Call the preceding record's timestamp `T` and its sequence number `S`. The epoch's records are written at that boundary — after the record holding `T`, before the record that moved past it — each with `exchange_ts = T` and sequence numbers `S+1, S+2, …, S+N`, one per instrument in ascending instrument ID.
+
+This is deliberately a nearest-boundary approximation rather than the cadence point itself. It is what makes the epoch's keys strictly increasing **by construction**, which is what `store.Writer` demands:
+
+- Against the record before it: same `exchange_ts`, and `S+1 > S`. Every earlier record at `T` has a sequence number at or below `S`, because the file's own keys already increase.
+- Against every record after it: their `exchange_ts` is greater than `T`, by the definition of the boundary the epoch was placed at. Nothing about their sequence numbers matters, because `exchange_ts` is compared first.
+- Within the run: `S+1 < S+2 < … < S+N`.
+
+There is no case left where an epoch record can collide with a real one, or sort before it. Splitting a run of equal timestamps would give up all three properties at once.
+
+An epoch is written into the file holding `T`, which is not always the file the record that triggered it belongs to: when the boundary is also a day boundary, the epoch closes the previous day's file.
+
+A snapshot pointer's sequence number is therefore converter-assigned, not source-derived. Nothing downstream reads that value for anything but ordering: `format.md`'s canonical projection hashes it, so two conversions of the same input must assign the same numbers — which this rule does — but no consumer attaches meaning to the number itself.
+
+### A source whose book cannot be rebuilt is rejected
+
+A Delta that removes a price level the converter has not seen returns `book.ErrLevelNotFound`, and the conversion stops with a `*RowError` naming that row. This is the reject-not-repair rule again: an epoch computed from a book that has already diverged from the venue's is worse than no artifact, because nothing downstream can tell the two apart. A source that starts mid-session therefore has to start from a snapshot per instrument.
 
 ## `exchange_ts` is checked, never repaired
 

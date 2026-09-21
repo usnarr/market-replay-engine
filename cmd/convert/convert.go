@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -61,13 +60,29 @@ func (e *RowError) Error() string {
 
 func (e *RowError) Unwrap() error { return e.Err }
 
+// Options configures one conversion. A zero field takes its documented
+// default.
+type Options struct {
+	// PriceScale is the positive power-of-ten divisor for every price and
+	// size in the output. The source carries scaled integers and no scale
+	// of its own, so the operator states it.
+	PriceScale int64
+
+	// EpochEvery is the snapshot epoch cadence, in records per venue.
+	// Zero means DefaultEpochEvery.
+	EpochEvery int
+}
+
 // Convert reads src and writes one hot-tier file per venue and UTC day
 // into outDir, returning the paths it wrote ordered by venue then day.
 // It validates the whole source schema before it creates any file, and
 // removes every file it has started if a later row is rejected: a
 // half-converted directory is worse than none, because nothing
 // downstream can tell one from a complete conversion.
-func Convert(src, outDir string, priceScale int64) ([]string, error) {
+func Convert(src, outDir string, opts Options) ([]string, error) {
+	if opts.EpochEvery == 0 {
+		opts.EpochEvery = DefaultEpochEvery
+	}
 	if _, err := CheckSourceFile(src); err != nil {
 		return nil, err
 	}
@@ -77,7 +92,7 @@ func Convert(src, outDir string, priceScale int64) ([]string, error) {
 	}
 	defer f.Close()
 
-	c := &converter{outDir: outDir, priceScale: priceScale}
+	c := &converter{outDir: outDir, opts: opts}
 	r := parquet.NewGenericReader[SourceRow](f)
 	defer r.Close()
 
@@ -116,60 +131,53 @@ type partition struct {
 // path, and this order is the order files are closed and reported in.
 // See the root CLAUDE.md.
 type converter struct {
-	outDir     string
-	priceScale int64
-	parts      []*partition
+	outDir string
+	opts   Options
+	parts  []*partition
 
-	// venues carries the per-venue checks that span a venue's day files,
-	// sorted by venue ID for the same reason parts is sorted.
-	venues []venueState
+	// venues carries what spans a venue's day files: its ordering-key
+	// position, its books, and its epoch cadence. Sorted by venue ID, for
+	// the same reason parts is sorted.
+	venues []*venueState
 }
 
-// venueState is what the converter remembers about one venue across all
-// of its day files.
-type venueState struct {
-	id     uint16
-	lastTs int64
-	seen   bool
-}
-
-// writeRow converts one source row and appends it to its partition.
+// writeRow converts one source row, emits an epoch if one is due at this
+// point, and appends the row's record to its partition.
 func (c *converter) writeRow(index int64, row SourceRow) error {
 	rec, bids, asks, err := recordOf(row)
 	if err != nil {
 		return &RowError{Index: index, Row: row, Err: err}
 	}
-	if err := c.checkExchangeTs(rec); err != nil {
-		return &RowError{Index: index, Row: row, Err: err}
+
+	// exchange_ts must never decrease within one venue, across that
+	// venue's day files and not just within one of them: that is the span
+	// docs/format.md states the guarantee over. Equal timestamps are fine.
+	v := c.venue(rec.VenueID)
+	if v.seen && rec.ExchangeTs < v.lastTs {
+		return &RowError{Index: index, Row: row, Err: ErrExchangeTsDecreased}
 	}
+	if v.epochDue(rec) {
+		if err := v.writeEpoch(); err != nil {
+			return err
+		}
+	}
+
 	p, err := c.partition(PartitionOf(rec.VenueID, rec.ExchangeTs))
 	if err != nil {
 		return err
 	}
 	if rec.RecordType == store.RecordTypeSnapshotPointer {
-		return p.w.WriteSnapshot(rec, bids, asks)
+		err = p.w.WriteSnapshot(rec, bids, asks)
+	} else {
+		err = p.w.WriteRecord(rec)
 	}
-	return p.w.WriteRecord(rec)
-}
-
-// checkExchangeTs enforces that exchange_ts never decreases within one
-// venue, and records rec's timestamp as that venue's latest. The check
-// spans a venue's day files, not just one of them, because that is the
-// span docs/format.md states the guarantee over. Equal timestamps are
-// fine: a venue repeats one, and the ordering key's later fields are
-// what separate two records that share it.
-func (c *converter) checkExchangeTs(rec store.Record) error {
-	i, found := slices.BinarySearchFunc(c.venues, rec.VenueID, func(v venueState, id uint16) int {
-		return cmp.Compare(v.id, id)
-	})
-	if !found {
-		c.venues = slices.Insert(c.venues, i, venueState{id: rec.VenueID})
+	if err != nil {
+		return err
 	}
-	v := &c.venues[i]
-	if v.seen && rec.ExchangeTs < v.lastTs {
-		return ErrExchangeTsDecreased
+	if err := v.applyToBook(rec, bids, asks); err != nil {
+		return &RowError{Index: index, Row: row, Err: err}
 	}
-	v.lastTs, v.seen = rec.ExchangeTs, true
+	v.advance(rec, p, c.opts.EpochEvery)
 	return nil
 }
 
@@ -183,7 +191,7 @@ func (c *converter) partition(key PartitionKey) (*partition, error) {
 	}
 
 	path := filepath.Join(c.outDir, key.FileName())
-	w, err := store.NewWriter(path, key.VenueID, c.priceScale)
+	w, err := store.NewWriter(path, key.VenueID, c.opts.PriceScale)
 	if err != nil {
 		return nil, err
 	}

@@ -77,7 +77,7 @@ func TestConvertPartitionsByVenueAndDay(t *testing.T) {
 	out := t.TempDir()
 	src := writeSourceParquet(t, t.TempDir(), "source.parquet", rows)
 
-	got, err := Convert(src, out, testPriceScale)
+	got, err := Convert(src, out, Options{PriceScale: testPriceScale})
 
 	if err != nil {
 		t.Fatalf("Convert() error = %v, want nil", err)
@@ -173,7 +173,7 @@ func TestConvertWritesSnapshotLevels(t *testing.T) {
 	out := t.TempDir()
 	src := writeSourceParquet(t, t.TempDir(), "source.parquet", rows)
 
-	paths, err := Convert(src, out, testPriceScale)
+	paths, err := Convert(src, out, Options{PriceScale: testPriceScale})
 
 	if err != nil {
 		t.Fatalf("Convert() error = %v, want nil", err)
@@ -249,7 +249,7 @@ func TestConvertRejectsAnUnconvertibleRow(t *testing.T) {
 			out := t.TempDir()
 			src := writeSourceParquet(t, t.TempDir(), "source.parquet", []SourceRow{tt.row})
 
-			_, err := Convert(src, out, testPriceScale)
+			_, err := Convert(src, out, Options{PriceScale: testPriceScale})
 
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Convert() error = %v, want %v", err, tt.want)
@@ -319,7 +319,7 @@ func TestConvertRejectsDecreasingExchangeTs(t *testing.T) {
 			out := t.TempDir()
 			src := writeSourceParquet(t, t.TempDir(), "source.parquet", tt.rows)
 
-			_, err := Convert(src, out, testPriceScale)
+			_, err := Convert(src, out, Options{PriceScale: testPriceScale})
 
 			if !tt.wantReject {
 				if err != nil {
