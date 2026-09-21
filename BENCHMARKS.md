@@ -174,6 +174,42 @@ arg.(func())()` (see `internal/clock/realclock.go`), so a fire may allocate a
 goroutine when the runtime's free-goroutine list is cold. This run happened to
 report zero, which is not a guarantee.
 
+### Observed accuracy
+
+`BenchmarkPacingAccuracy` paces 1000 synthetic records at 10x real time and checks
+the result against the schedule. Per Q7 (`plans/16-open-questions.md`), only two
+things are hard-asserted: no record releases more than one measured window early
+(release-batching's own documented bound, not zero — see `Pacer.Wait`), and the
+observed span from first to last release tracks the scheduled span within
+`rateToleranceThousandths`. Per-event lateness is reported, never asserted, since
+Q7's answer is precisely that no per-event guarantee exists.
+
+35 runs total (`-benchtime=1x`, so each run is exactly one pass): 20 to establish
+the tolerance, 15 more after fixing it, to confirm the fixed value still holds.
+Zero failures across all 35. Distribution from the first 20 runs:
+
+| Metric | Min | Median | Max |
+|---|---|---|---|
+| `max_late_ns` | 1.11ms | 1.58ms | 4.77ms |
+| `mean_late_ns` | −4.48ms | 0.18ms | 0.21ms |
+| `p99_late_ns` | 0.77ms | 1.09ms | 1.13ms |
+| `window_ns` (measured) | 0.73ms | 0.81ms | 10.00ms |
+| `rate_err_pct` | 0.0% | 0.0% | 0.7% |
+
+One run (of 20) hit a real outlier: a scheduling noise spike during `measureWindow`'s
+own probes measured a worst-case sample large enough to saturate `maxWindow`
+(10ms), for that run only — `measureWindow` deliberately takes the *worst* of 8
+samples, precisely so it never under-estimates a clock's resolution, so an
+occasional noisy sample inflating the window is the accepted cost of that choice,
+not a bug. That same run's `mean_late_ns` went negative (more early releases than
+late ones, all still within the one-window bound) and `rate_err_pct` peaked at
+0.7% — still comfortably under the chosen tolerance.
+
+`rateToleranceThousandths = 20` (2.0%), set with roughly 28× margin above the
+observed 0.7% worst case. If this benchmark starts flaking on a noisier machine or
+CI runner, widen the tolerance and record the new distribution here — never delete
+the assertion it backs.
+
 ## End-to-end replay rate
 
 _No measurements yet. First entry lands once `cmd/replayd` (M9) can run a full synthetic dataset end to end._
