@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"math"
+	"net/http"
 	"slices"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -106,6 +109,69 @@ type Config struct {
 	WatchdogTimeout int64
 }
 
+// metrics is the server's instrument set. Every field is a concrete
+// prometheus.Counter or Gauge, resolved once at construction and never
+// a *CounterVec looked up by label: WithLabelValues does a map lookup
+// and builds a label slice on every call, which is both an allocation
+// and a data-dependent cost on a path this project keeps free of both.
+// Counters and gauges only, never a histogram: a histogram observation
+// needs a clock read to bucket by, and a clock read on the replay path
+// is banned.
+type metrics struct {
+	recordsEmitted prometheus.Counter
+	bytesEmitted   prometheus.Counter
+	gapsDetected   prometheus.Counter
+	recordsMissed  prometheus.Counter
+	subscribers    prometheus.Gauge
+}
+
+// newMetrics registers the instrument set against reg. The emit index
+// and the pacing slip are GaugeFuncs over the ring's own atomics, read
+// when Prometheus scrapes rather than written per record, so neither
+// costs the send loop anything at all.
+func newMetrics(reg prometheus.Registerer, r *fanout.Ring) (*metrics, error) {
+	m := &metrics{
+		recordsEmitted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "replay_records_emitted_total",
+			Help: "Records delivered to subscribers.",
+		}),
+		bytesEmitted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "replay_bytes_emitted_total",
+			Help: "Record and snapshot payload bytes delivered to subscribers, before gRPC's own framing.",
+		}),
+		gapsDetected: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "replay_gaps_detected_total",
+			Help: "Gaps reported to Drop subscribers.",
+		}),
+		recordsMissed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "replay_records_missed_total",
+			Help: "Records inside reported gaps, summed over every gap.",
+		}),
+		subscribers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "replay_subscribers",
+			Help: "Subscribers currently attached.",
+		}),
+	}
+
+	collectors := []prometheus.Collector{
+		m.recordsEmitted, m.bytesEmitted, m.gapsDetected, m.recordsMissed, m.subscribers,
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "replay_emit_index",
+			Help: "The next emit index the writer will assign.",
+		}, func() float64 { return float64(r.WriteIndex()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "replay_pacing_slip_nanoseconds",
+			Help: "Cumulative nanoseconds the writer has spent parked at the Block barrier.",
+		}, func() float64 { return float64(r.PacingSlipNanos()) }),
+	}
+	for _, c := range collectors {
+		if err := reg.Register(c); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
 // Server assembles internal/store, internal/merge, internal/clock and
 // internal/fanout behind the gRPC service. It holds no replay logic of
 // its own: everything below the wire translation lives in internal/*,
@@ -113,9 +179,11 @@ type Config struct {
 type Server struct {
 	api.UnimplementedReplayServiceServer
 
-	cfg    Config
-	ring   *fanout.Ring
-	merger *merge.Merger
+	cfg     Config
+	ring    *fanout.Ring
+	merger  *merge.Merger
+	reg     *prometheus.Registry
+	metrics *metrics
 
 	mu      sync.Mutex
 	started bool
@@ -154,7 +222,21 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{cfg: cfg, ring: r, merger: m}, nil
+	reg := prometheus.NewRegistry()
+	mx, err := newMetrics(reg, r)
+	if err != nil {
+		_ = m.Close()
+		return nil, err
+	}
+
+	return &Server{cfg: cfg, ring: r, merger: m, reg: reg, metrics: mx}, nil
+}
+
+// MetricsHandler serves this run's metrics in Prometheus' own text
+// format. Each server keeps its own registry rather than the package
+// default, so two servers in one process never collide.
+func (s *Server) MetricsHandler() http.Handler {
+	return promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{})
 }
 
 // openCursors opens every configured file and groups them into one
@@ -260,7 +342,11 @@ func (s *Server) Subscribe(req *api.SubscribeRequest, stream grpc.ServerStreamin
 	if err != nil {
 		return subscribeStatus(err)
 	}
-	defer func() { _ = s.ring.Unsubscribe(sub) }()
+	s.metrics.subscribers.Inc()
+	defer func() {
+		s.metrics.subscribers.Dec()
+		_ = s.ring.Unsubscribe(sub)
+	}()
 
 	// grpc-go's stream context is the one place this server observes
 	// "the client went away", and it is the transport's own concern,
@@ -292,6 +378,19 @@ func (s *Server) Subscribe(req *api.SubscribeRequest, stream grpc.ServerStreamin
 		}
 		if err := stream.Send(resp); err != nil {
 			return err
+		}
+
+		// Concrete counters, resolved at construction: no label lookup,
+		// no allocation, and every Add takes an integral value, so the
+		// totals stay exactly comparable between two runs of the same
+		// dataset. The byte count is the record and its payload, not
+		// the framed wire size, which depends on gRPC's own codec and
+		// would cost a second pass over every message to measure.
+		s.metrics.recordsEmitted.Inc()
+		s.metrics.bytesEmitted.Add(float64(store.RecordSize + len(d.Blob)))
+		if d.HasGap {
+			s.metrics.gapsDetected.Inc()
+			s.metrics.recordsMissed.Add(float64(d.Gap.Count))
 		}
 	}
 }

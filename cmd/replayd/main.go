@@ -14,9 +14,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -52,6 +54,7 @@ func run(args []string) error {
 	var files fileList
 	fs.Var(&files, "file", "hot-tier file to replay; repeat once per file")
 	listen := fs.String("listen", "127.0.0.1:0", "address to serve gRPC on")
+	metricsListen := fs.String("metrics-listen", "", "address to serve Prometheus metrics on; empty disables them")
 	workers := fs.Int("workers", 4, "merge decode worker count; changes concurrency only, never the merged stream")
 	capacity := fs.Int("capacity", 1024, "fan-out ring slot count; must be a power of two")
 	maxBlob := fs.Int("max-blob-bytes", 4096, "longest snapshot blob payload the ring will carry")
@@ -96,6 +99,18 @@ func run(args []string) error {
 	gs := grpc.NewServer(grpcServerOptions()...)
 	api.RegisterReplayServiceServer(gs, srv)
 
+	var metricsSrv *http.Server
+	if *metricsListen != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", srv.MetricsHandler())
+		metricsSrv = &http.Server{Addr: *metricsListen, Handler: mux}
+		go func() {
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintln(os.Stderr, "replayd: metrics:", err)
+			}
+		}()
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -104,6 +119,12 @@ func run(args []string) error {
 	}()
 
 	serveErr := gs.Serve(lis)
+	if metricsSrv != nil {
+		// Close, not Shutdown: Shutdown waits for in-flight scrapes
+		// with a deadline, and a deadline here would need a real clock
+		// read this command does not get to make.
+		_ = metricsSrv.Close()
+	}
 	closeErr := srv.Close()
 	if serveErr != nil {
 		return serveErr

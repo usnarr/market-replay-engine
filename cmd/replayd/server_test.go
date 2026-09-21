@@ -5,9 +5,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -366,6 +370,83 @@ func TestGRPCFlowControlWindowsArePinned(t *testing.T) {
 
 		if received != ds.RecordCount() {
 			t.Errorf("received %d records over a pinned connection, want %d", received, ds.RecordCount())
+		}
+	})
+}
+
+func TestMetrics(t *testing.T) {
+	t.Run("a_block_subscribers_run_counts_every_record_and_no_gap", func(t *testing.T) {
+		dir := t.TempDir()
+		ds := synth.Standard(t, dir)
+		srv := newTestServer(t, testConfig(t, ds))
+
+		if err := srv.Subscribe(blockRequest(), newFakeStream(t)); err != nil {
+			t.Fatalf("Subscribe() error = %v, want nil", err)
+		}
+
+		tests := []struct {
+			name string
+			got  float64
+			want float64
+		}{
+			{name: "every_record_is_counted", got: testutil.ToFloat64(srv.metrics.recordsEmitted), want: float64(ds.RecordCount())},
+			{name: "a_block_subscriber_reports_no_gap", got: testutil.ToFloat64(srv.metrics.gapsDetected), want: 0},
+			{name: "a_block_subscriber_misses_no_record", got: testutil.ToFloat64(srv.metrics.recordsMissed), want: 0},
+			{name: "the_subscriber_gauge_returns_to_zero", got: testutil.ToFloat64(srv.metrics.subscribers), want: 0},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.got != tt.want {
+					t.Errorf("metric = %v, want %v", tt.got, tt.want)
+				}
+			})
+		}
+		if got := testutil.ToFloat64(srv.metrics.bytesEmitted); got < float64(store.RecordSize*ds.RecordCount()) {
+			t.Errorf("bytes emitted = %v, want at least %v (one fixed-stride record each)",
+				got, store.RecordSize*ds.RecordCount())
+		}
+	})
+
+	t.Run("a_lapped_drop_subscribers_counters_add_up_to_the_whole_run", func(t *testing.T) {
+		dir := t.TempDir()
+		ds := synth.Standard(t, dir)
+		cfg := testConfig(t, ds)
+		cfg.Capacity = 2
+		srv := newTestServer(t, cfg)
+		req := blockRequest()
+		req.Mode = api.Mode_MODE_DROP
+
+		if err := srv.Subscribe(req, newFakeStream(t)); err != nil {
+			t.Fatalf("Subscribe() error = %v, want nil", err)
+		}
+
+		emitted := testutil.ToFloat64(srv.metrics.recordsEmitted)
+		missed := testutil.ToFloat64(srv.metrics.recordsMissed)
+		if emitted+missed != float64(ds.RecordCount()) {
+			t.Errorf("emitted %v + missed %v = %v, want %d (the whole merged stream)",
+				emitted, missed, emitted+missed, ds.RecordCount())
+		}
+		if missed > 0 && testutil.ToFloat64(srv.metrics.gapsDetected) == 0 {
+			t.Errorf("records were missed but no gap was counted")
+		}
+	})
+
+	t.Run("the_handler_serves_the_runs_own_registry", func(t *testing.T) {
+		dir := t.TempDir()
+		ds := synth.Standard(t, dir)
+		srv := newTestServer(t, testConfig(t, ds))
+		rec := httptest.NewRecorder()
+
+		srv.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /metrics status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		for _, name := range []string{"replay_records_emitted_total", "replay_emit_index", "replay_pacing_slip_nanoseconds", "replay_subscribers"} {
+			if !strings.Contains(rec.Body.String(), name) {
+				t.Errorf("GET /metrics body does not mention %s", name)
+			}
 		}
 	})
 }
