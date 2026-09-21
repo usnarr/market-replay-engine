@@ -62,6 +62,11 @@ func run(args []string) error {
 	watchdog := fs.Int64("watchdog-ns", 0, "evict a Block subscriber that holds the writer this long with no progress; 0 disables")
 	manifest := fs.String("manifest", "", "write the run manifest here when the run ends; empty writes none")
 	if err := fs.Parse(args); err != nil {
+		// -h is a request, not a failure, and Parse has already
+		// printed the usage text.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if len(files) == 0 {
