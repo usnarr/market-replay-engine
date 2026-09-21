@@ -44,13 +44,15 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: go test ./...
-      # cmd/lint-determinism and cmd/convert are separate modules (see
-      # plans/01-repo-and-toolchain.md); ./... from the repo root does
-      # not cross into them.
+      # cmd/lint-determinism, cmd/convert and cmd/catalogue are separate
+      # modules (see plans/01-repo-and-toolchain.md); ./... from the repo
+      # root does not cross into them.
       - run: go test ./...
         working-directory: cmd/lint-determinism
       - run: go test ./...
         working-directory: cmd/convert
+      - run: go test ./...
+        working-directory: cmd/catalogue
 
   # -race needs a working C toolchain on the runner. ubuntu-latest and
   # macos-latest images carry one; confirm the same is true for
@@ -70,6 +72,8 @@ jobs:
         working-directory: cmd/lint-determinism
       - run: go test -race ./...
         working-directory: cmd/convert
+      - run: go test -race ./...
+        working-directory: cmd/catalogue
 
   determinism:
     strategy:
