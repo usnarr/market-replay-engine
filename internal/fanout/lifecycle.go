@@ -99,10 +99,20 @@ func (r *Ring) closeControl() {
 	}
 }
 
-// Unsubscribe removes s from r. Once r is being actively emitted (see
-// StartEmitting), the removal is queued and applied between records,
-// exactly like a join; before that, it happens immediately.
+// Unsubscribe removes s from r and cancels it, so a goroutine parked in
+// s.Next is released with ErrCanceled instead of waiting for the whole
+// ring to end. Once r is being actively emitted (see StartEmitting), the
+// removal is queued and applied between records, exactly like a join;
+// before that, it happens immediately.
+//
+// The cancellation is deferred to after the removal on every return
+// path, so the writer never observes a canceled subscriber that still
+// counts toward the Block barrier — a cursor that has stopped advancing
+// while it is still registered is exactly what the barrier waits on
+// forever. See docs/backpressure.md.
 func (r *Ring) Unsubscribe(s *Subscriber) error {
+	defer s.Cancel()
+
 	r.ctrl.mu.Lock()
 	if !r.ctrl.started {
 		r.ctrl.mu.Unlock()
