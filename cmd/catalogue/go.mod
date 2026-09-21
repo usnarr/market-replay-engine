@@ -4,7 +4,10 @@ go 1.23.0
 
 toolchain go1.23.4
 
-require modernc.org/sqlite v1.39.0
+require (
+	github.com/google/go-cmp v0.7.0
+	modernc.org/sqlite v1.39.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

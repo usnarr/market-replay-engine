@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS benchmarks (
     name               TEXT    NOT NULL,
     git_commit         TEXT    NOT NULL,
+
+    -- The measurement's position in the result file it came from. A
+    -- `make bench BENCHCOUNT=6` run reports one benchmark six times, and
+    -- comparing those samples is the point, so they cannot share a key.
+    sample             INTEGER NOT NULL,
+
     iterations         INTEGER NOT NULL,
     ns_per_op          REAL    NOT NULL,
     bytes_per_op       INTEGER NOT NULL,
@@ -46,8 +52,8 @@ CREATE TABLE IF NOT EXISTS benchmarks (
 
     recorded_unix_nano INTEGER NOT NULL,
 
-    -- One measurement per benchmark per commit per ingestion. Two
-    -- `make bench` runs at the same commit are two rows, because
-    -- comparing them is the point.
-    PRIMARY KEY (name, git_commit, recorded_unix_nano)
+    -- Ingesting the same result file twice is a key collision, not a
+    -- silent duplicate. Two `make bench` runs at the same commit are
+    -- distinct rows, because their timestamps differ.
+    PRIMARY KEY (name, git_commit, recorded_unix_nano, sample)
 ) STRICT;
