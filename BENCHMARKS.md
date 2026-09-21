@@ -16,7 +16,33 @@ Each table below is append-only history, one row per committed change, not a sin
 
 ## Merge throughput
 
-_No measurements yet. First entry lands with the M4 checkpoint in `internal/merge`._
+Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th Gen Intel Core i7-11370H @ 3.30GHz.
+
+| Date | Commit | Change | Before | After | Profile |
+|---|---|---|---|---|---|
+| 2026-09-21 | (this commit) | M7: first benchmarks for the loser tree, the comparator, and Merger.Next | — | see below | — |
+
+```
+BenchmarkLoserTreePop/k_2-8          8.156 ns/op   0 B/op   0 allocs/op
+BenchmarkLoserTreePop/k_4-8         10.340 ns/op   0 B/op   0 allocs/op
+BenchmarkLoserTreePop/k_8-8         11.970 ns/op   0 B/op   0 allocs/op
+BenchmarkLoserTreePop/k_16-8        13.940 ns/op   0 B/op   0 allocs/op
+BenchmarkLoserTreePop/k_64-8        18.780 ns/op   0 B/op   0 allocs/op
+BenchmarkCompareKey-8                0.220 ns/op   0 B/op   0 allocs/op
+BenchmarkMergerNext/workers_1-8     52.060 ns/op   0 B/op   0 allocs/op
+BenchmarkMergerNext/workers_4-8     56.610 ns/op   0 B/op   0 allocs/op
+BenchmarkMergerNext/workers_16-8    58.330 ns/op   0 B/op   0 allocs/op
+```
+
+`BenchmarkLoserTreePop` grows roughly with log2(k), matching the tree's own design
+note (half a binary min-heap's comparisons per pop). `BenchmarkMergerNext` replays
+`internal/synth`'s standard dataset end to end, rebuilding the merger outside the
+timer whenever it exhausts, so this is steady-state per-record throughput, not one
+dataset pass amortized over a much larger `b.N`; the small rise from 1 to 16 workers
+is reader-goroutine coordination overhead on a dataset small enough that decode
+itself is not the bottleneck at any worker count tested. All three benchmarks report
+zero allocations, ungated for now — `internal/allocgate.AssertZero` is applied to
+`BenchmarkLoserTreePop` specifically in a later commit.
 
 ## Fan-out throughput
 

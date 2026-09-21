@@ -61,7 +61,12 @@ type Dataset struct {
 // same shape produce byte-identical files, which is what lets two
 // suites replay "the same dataset" without one importing the other's
 // test files.
-func Build(t *testing.T, dir string, shape [][]int) *Dataset {
+//
+// t is testing.TB, not *testing.T, so a benchmark can build the same
+// dataset a test would: internal/merge's own hot-path benchmarks need
+// the same shape internal/merge and internal/fanout's determinism
+// suites already replay, not a third one.
+func Build(t testing.TB, dir string, shape [][]int) *Dataset {
 	t.Helper()
 
 	ds := &Dataset{
@@ -127,7 +132,7 @@ func Build(t *testing.T, dir string, shape [][]int) *Dataset {
 }
 
 // Standard writes the standard dataset (Shape) and returns it.
-func Standard(t *testing.T, dir string) *Dataset {
+func Standard(t testing.TB, dir string) *Dataset {
 	t.Helper()
 	return Build(t, dir, Shape)
 }
