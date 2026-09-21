@@ -14,6 +14,12 @@ env:
   # pins (it has before: v0.7.0+ requires go1.26). Pin a version that
   # declares go1.23 or older, and bump deliberately alongside GO_VERSION.
   STATICCHECK_VERSION: "v0.6.1"
+  # golang.org/x/perf ships pseudo-versions, not regular tags, so there
+  # is no stable version string to pin here the way STATICCHECK_VERSION
+  # pins one -- @latest is deliberate, not an oversight. Revisit only if
+  # a specific pseudo-version needs pinning against a future Go bump,
+  # the same reason STATICCHECK_VERSION exists.
+  BENCHSTAT_VERSION: "latest"
 
 jobs:
   lint:
@@ -75,6 +81,27 @@ jobs:
 
   # Never combined with -race: the race detector's own instrumentation
   # allocates and would fail the zero-allocation gate unconditionally.
+  #
+  # make bench's own exit code is what enforces the zero-allocation
+  # gate (internal/allocgate.AssertZero, applied in
+  # plans/13-bench-and-profiles.md's own commits) -- a nonzero
+  # allocation on a gated benchmark fails this step outright, no
+  # benchstat step needed to catch that.
+  #
+  # The benchstat comparison below is warn-only, for throughput: it
+  # posts to the job summary but never fails the build on its own,
+  # because a CI runner's own noise is not yet characterized enough to
+  # set a trustworthy hard tolerance (see plans/13-bench-and-profiles.md
+  # -- "tune the tolerance empirically once real numbers exist," the
+  # same rule this project applies to every other tolerance). It
+  # compares against bench/baseline.txt, a file this repository does
+  # not yet commit: BENCHMARKS.md's numbers so far are all from a
+  # Windows development machine, which this job's own numbers -- from
+  # ubuntu-latest -- are not comparable to (see BENCHMARKS.md's own
+  # per-section environment lines). Establishing bench/baseline.txt is
+  # a deliberate follow-up: take one committed bench-results artifact
+  # from this job and commit it as bench/baseline.txt, so every later
+  # comparison is CI-hardware to CI-hardware.
   bench:
     runs-on: ubuntu-latest
     steps:
@@ -82,7 +109,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - run: make bench
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@${{ env.BENCHSTAT_VERSION }}
+      - run: make bench BENCHCOUNT=6
+      - name: Compare against the committed baseline
+        if: hashFiles('bench/baseline.txt') != ''
+        run: |
+          {
+            echo '## Benchmark comparison against bench/baseline.txt'
+            echo '```'
+            benchstat bench/baseline.txt bench/results/latest.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Note that no baseline is committed yet
+        if: hashFiles('bench/baseline.txt') == ''
+        run: echo 'No bench/baseline.txt committed yet, so this run has nothing to compare against -- see the bench job comments in .github/workflows/ci.yml for how to establish one.' | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results/latest.txt
 
   fuzz:
     runs-on: ubuntu-latest

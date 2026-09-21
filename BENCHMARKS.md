@@ -14,6 +14,24 @@ Each table below is append-only history, one row per committed change, not a sin
 | YYYY-MM-DD | abc1234 | one-line description | ... | ... | profiles/<name>.svg |
 -->
 
+## Regression tolerance
+
+CI's `bench` job runs `make bench BENCHCOUNT=6` and compares against a committed
+`bench/baseline.txt` with `benchstat`, posting the comparison to the job summary.
+This is **warn-only**: it never fails the build on a throughput regression, only on
+the allocation gate (`make bench`'s own exit code, via `internal/allocgate.AssertZero`
+— see this file's own per-section rows for which benchmarks are gated). A hard
+throughput tolerance is not set yet; per this file's own rule, tune it empirically
+once real CI-runner numbers exist, not by guessing a tight number up front and then
+fighting CI noise instead of real regressions.
+
+`bench/baseline.txt` is not committed yet. Every number in this file so far is from
+a Windows development machine (see each section's own environment line), which is
+not comparable to `ubuntu-latest`, where the CI job actually runs — committing a
+Windows-sourced baseline for a Linux-runner comparison would compare the wrong
+things and call it a regression. Establish it by taking one `bench-results` artifact
+from a real `bench` job run and committing it as `bench/baseline.txt`.
+
 ## Merge throughput
 
 Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th Gen Intel Core i7-11370H @ 3.30GHz.
