@@ -5,6 +5,7 @@ import (
 	"errors"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -189,6 +190,92 @@ func TestBatchFill(t *testing.T) {
 			}
 		}
 	})
+}
+
+// rangeCounts is the batch sizes a file of n records splits into when
+// one batch covers size records.
+func rangeCounts(n, size int) []int {
+	var counts []int
+	for n > 0 {
+		c := min(n, size)
+		counts = append(counts, c)
+		n -= c
+	}
+	return counts
+}
+
+func TestVenueFeedFollowsTheBatchShape(t *testing.T) {
+	// Batch size and feed depth are two of the axes the determinism suite
+	// varies. A shape that is accepted but not applied would make those
+	// subtests silently replay the default shape every time.
+	recs := deltaRecords(3, 100, 0, 2500)
+	path := writeVenueFile(t, "venue.bin", 3, recs)
+
+	tests := []struct {
+		name  string
+		shape batchShape
+	}{
+		{name: "the_default_shape", shape: defaultBatchShape()},
+		{name: "one_record_per_batch", shape: batchShape{records: 1, batches: 2}},
+		{name: "one_batch_larger_than_the_whole_file", shape: batchShape{records: len(recs) + 1, batches: 2}},
+		{name: "a_size_that_does_not_divide_the_file", shape: batchShape{records: 333, batches: 5}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var abort atomic.Bool
+			f := newVenueFeed(newCursorOver(t, 3, path), &abort, tt.shape)
+
+			var got []int
+			for {
+				_, _, count, ok := f.nextRange()
+				if !ok {
+					break
+				}
+				got = append(got, count)
+			}
+
+			if diff := cmp.Diff(rangeCounts(len(recs), tt.shape.records), got); diff != "" {
+				t.Errorf("nextRange() counts mismatch (-want +got):\n%s", diff)
+			}
+			if n := cap(f.free); n != tt.shape.batches {
+				t.Errorf("cap(free) = %d, want %d", n, tt.shape.batches)
+			}
+			if n := len(f.free); n != tt.shape.batches {
+				t.Errorf("len(free) = %d, want %d", n, tt.shape.batches)
+			}
+			if n := cap((<-f.free).events); n != tt.shape.records {
+				t.Errorf("cap(batch.events) = %d, want %d", n, tt.shape.records)
+			}
+		})
+	}
+}
+
+func TestNewMergerShapeRejectsAnUnusableShape(t *testing.T) {
+	// A venue issues work only while it holds fewer than batches-1
+	// batches, so a depth below two lets it issue none at all and the
+	// replay would report an empty stream instead of failing.
+	tests := []struct {
+		name  string
+		shape batchShape
+	}{
+		{name: "no_records_in_a_batch", shape: batchShape{records: 0, batches: 3}},
+		{name: "a_negative_batch_size", shape: batchShape{records: -1, batches: 3}},
+		{name: "one_batch_per_venue", shape: batchShape{records: 8, batches: 1}},
+		{name: "no_batches_at_all", shape: batchShape{records: 8, batches: 0}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cursors := cursorsFor(t, []venueFiles{{venue: 1, days: [][]store.Record{records(1, 0, 1)}}})
+
+			_, err := newMergerShape(cursors, 4, tt.shape)
+
+			if !errors.Is(err, ErrBatchShape) {
+				t.Fatalf("newMergerShape(%+v) error = %v, want %v", tt.shape, err, ErrBatchShape)
+			}
+		})
+	}
 }
 
 func TestCheckOrder(t *testing.T) {

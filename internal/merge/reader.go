@@ -30,6 +30,30 @@ const (
 // This fails to compile below that.
 const _ = uint(feedBatches - 2)
 
+// batchShape is one concurrent replay's batch geometry: how many records
+// one batch covers, and how many batches a venue owns. Every production
+// replay uses defaultBatchShape; this is settable per construction
+// because batch size and feed-channel depth are two of the axes the
+// determinism suite has to vary, and no other caller in the package
+// chooses either.
+type batchShape struct {
+	records int
+	batches int
+}
+
+// defaultBatchShape is the shape a replay uses when nothing overrides
+// it: the package's own batchRecords and feedBatches.
+func defaultBatchShape() batchShape {
+	return batchShape{records: batchRecords, batches: feedBatches}
+}
+
+// valid reports whether a venue feed can make progress with this shape.
+// A depth below two lets a venue issue no work at all, which would end a
+// replay with an empty stream rather than an error.
+func (s batchShape) valid() bool {
+	return s.records >= 1 && s.batches >= 2
+}
+
 // batch is a run of consecutive records from one venue, decoded by one
 // worker. It carries its records and nothing else: no worker id, no
 // arena index, no goroutine-assigned counter. Decode is a pure function
@@ -49,9 +73,15 @@ type batch struct {
 }
 
 func newBatch(venueID uint16) *batch {
+	return newSizedBatch(venueID, batchRecords)
+}
+
+// newSizedBatch is newBatch with an explicit record capacity, for a feed
+// built with a non-default batchShape.
+func newSizedBatch(venueID uint16, records int) *batch {
 	return &batch{
 		venueID: venueID,
-		events:  make([]Event, 0, batchRecords),
+		events:  make([]Event, 0, records),
 		done:    make(chan struct{}, 1),
 	}
 }
@@ -171,6 +201,7 @@ type venueFeed struct {
 	venueID uint16
 	readers []*store.Reader
 	abort   *atomic.Bool
+	shape   batchShape
 
 	file  int
 	index int
@@ -194,18 +225,19 @@ type venueFeed struct {
 // seek applied to c before the merge is constructed take effect on the
 // concurrent path too: this is the only thing that reads c.file and
 // c.index, since the concurrent path never calls c.Next.
-func newVenueFeed(c *Cursor, abort *atomic.Bool) *venueFeed {
+func newVenueFeed(c *Cursor, abort *atomic.Bool, shape batchShape) *venueFeed {
 	f := &venueFeed{
 		venueID: c.venueID,
 		readers: c.readers,
 		abort:   abort,
+		shape:   shape,
 		file:    c.file,
 		index:   c.index,
 		ch:      make(chan *batch),
-		free:    make(chan *batch, feedBatches),
+		free:    make(chan *batch, shape.batches),
 	}
-	for i := 0; i < feedBatches; i++ {
-		f.free <- newBatch(c.venueID)
+	for i := 0; i < shape.batches; i++ {
+		f.free <- newSizedBatch(c.venueID, shape.records)
 	}
 	return f
 }
@@ -222,7 +254,7 @@ func (f *venueFeed) nextRange() (*store.Reader, int, int, bool) {
 		}
 
 		start := f.index
-		count := batchRecords
+		count := f.shape.records
 		if rem := r.Len() - start; count > rem {
 			count = rem
 		}
@@ -239,7 +271,7 @@ func (f *venueFeed) nextRange() (*store.Reader, int, int, bool) {
 func (f *venueFeed) run(p *pool) {
 	defer close(f.ch)
 
-	inflight := make([]*batch, 0, feedBatches)
+	inflight := make([]*batch, 0, f.shape.batches)
 	for {
 		// Issue ahead, but leave one batch for the merge to hold. That
 		// keeps this goroutine's only wait the send below, where
@@ -247,7 +279,7 @@ func (f *venueFeed) run(p *pool) {
 		// still works — the merge frees one before it blocks on the
 		// receive — but it parks the owner on the free channel instead,
 		// with nothing decoded and ready.
-		for len(inflight) < feedBatches-1 && !f.abort.Load() {
+		for len(inflight) < f.shape.batches-1 && !f.abort.Load() {
 			r, start, count, ok := f.nextRange()
 			if !ok {
 				break

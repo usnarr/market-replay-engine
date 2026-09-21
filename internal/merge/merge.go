@@ -90,7 +90,7 @@ type Merger struct {
 // no worker pool. Use it when a replay should start no goroutines at
 // all; the output is identical to NewConcurrentMerger's.
 func NewMerger(cursors []*Cursor) (*Merger, error) {
-	return newMerger(cursors, 0, nil)
+	return newMerger(cursors, 0, defaultBatchShape(), nil)
 }
 
 // NewConcurrentMerger returns a merger whose records are decoded by a
@@ -101,7 +101,21 @@ func NewConcurrentMerger(cursors []*Cursor, workers int) (*Merger, error) {
 	if workers < 1 {
 		return nil, ErrWorkerCount
 	}
-	return newMerger(cursors, workers, nil)
+	return newMerger(cursors, workers, defaultBatchShape(), nil)
+}
+
+// newMergerShape is NewConcurrentMerger with an explicit batch shape,
+// for the determinism suite only. Batch size and feed-channel depth are
+// two of the axes that suite varies, and the merged stream must not
+// depend on either.
+func newMergerShape(cursors []*Cursor, workers int, shape batchShape) (*Merger, error) {
+	if workers < 1 {
+		return nil, ErrWorkerCount
+	}
+	if !shape.valid() {
+		return nil, ErrBatchShape
+	}
+	return newMerger(cursors, workers, shape, nil)
 }
 
 // newMergerChaos is NewConcurrentMerger with scheduling perturbation
@@ -114,7 +128,7 @@ func newMergerChaos(cursors []*Cursor, workers int, seed uint64) (*Merger, error
 	if workers < 1 {
 		return nil, ErrWorkerCount
 	}
-	return newMerger(cursors, workers, &seed)
+	return newMerger(cursors, workers, defaultBatchShape(), &seed)
 }
 
 // newMerger takes ownership of the cursors. It reads one event from each
@@ -125,7 +139,7 @@ func newMergerChaos(cursors []*Cursor, workers int, seed uint64) (*Merger, error
 // cursors can never tie on the ordering key rests on their venue ids
 // differing, and so does the claim that a duplicate key can only come
 // from inside one partition.
-func newMerger(cursors []*Cursor, workers int, chaosSeed *uint64) (*Merger, error) {
+func newMerger(cursors []*Cursor, workers int, shape batchShape, chaosSeed *uint64) (*Merger, error) {
 	venues := make([]uint16, len(cursors))
 	for i, c := range cursors {
 		venues[i] = c.VenueID()
@@ -147,7 +161,7 @@ func newMerger(cursors []*Cursor, workers int, chaosSeed *uint64) (*Merger, erro
 		m.pool = newPool(workers)
 		m.venues = make([]*venueFeed, len(cursors))
 		for i, c := range cursors {
-			vf := newVenueFeed(c, &m.abort)
+			vf := newVenueFeed(c, &m.abort, shape)
 			if chaosSeed != nil {
 				// vf.venueID, not the loop index i or any other
 				// start-order-derived value: see chaosPerturb's doc
