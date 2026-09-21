@@ -53,3 +53,11 @@ A fired `SimClock` timer sends **its own deadline**, not `SimClock`'s current `n
 `Reset` keeps a timer's original registration ID, so rescheduling it does not change its tie-break position relative to timers created around the same time.
 
 If `SimClock` is ever extended so multiple goroutines can call `SleepUntil` concurrently and get woken by the same `Advance` call, the wake order across those goroutines is still not allowed to be observable in content — only delivery timing may depend on it. Nobody should "fix" a flaky pacing test by making `SimClock`'s wake order match goroutine start order.
+
+## Taking a `Clock`, and the one place a value depends on real time
+
+Every package that needs time takes a `Clock` and reads it through the interface — this is not itself a departure from "`time.Now` appears exactly once," because `RealClock` stays the one call site regardless of how many packages hold a value of it. `internal/fanout.Config.Clock` (defaulting to `RealClock{}` when left unset) is the first consumer: it drives the `pacing_slip` gauge and the stalled-Block-subscriber watchdog, neither of which ever reaches hashed content.
+
+The watchdog is worth calling out precisely, because it is the one place in the project where a run's *out-of-band* outcome — which subscriber, if any, gets evicted, and when — genuinely depends on real elapsed time and cannot be simulated. `SimClock`'s `Now()` never moves on its own, so "no progress for a real duration" has no meaning under it; a determinism run configured with `WatchdogTimeout: 0` (the default) disables the watchdog entirely, which is exactly right, because content and order must never depend on wall-clock scheduling and eviction is the one thing here that legitimately does. See `docs/backpressure.md` for the watchdog's own design and why eviction is checked before every read, not just once.
+
+This is not a lint-suppressed exception — `cmd/lint-determinism`'s `no-time-now` rule matches a selector on the `time` package directly (`time.Now`, `time.Sleep`, and so on); calling `Now()` on a `clock.Clock` value never matches it, watchdog included, so `cmd/lint-determinism/suppress.go`'s `Allowlist` stays empty. The exception here is a design discipline, stated in this file and in code comments at the call site, not a gap in the tooling.

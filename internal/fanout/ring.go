@@ -53,14 +53,25 @@ type Config struct {
 	MaxBlobBytes int
 
 	// Clock measures how long Write spends parked at the Block barrier,
-	// for the pacing_slip gauge. It defaults to clock.RealClock{} when
-	// left nil — this is not a second exception to "time.Now appears
-	// exactly once": RealClock is the one call site regardless of who
-	// constructs a value of it, and pacing_slip is diagnostic, never
-	// part of hashed content. A determinism test that cares about the
-	// gauge's value passes its own Clock, exactly like every other
+	// for the pacing_slip gauge, and how long a Block subscriber has made
+	// no progress, for the stalled-subscriber watchdog below. It
+	// defaults to clock.RealClock{} when left nil — this is not a second
+	// exception to "time.Now appears exactly once": RealClock is the one
+	// call site regardless of who constructs a value of it, and neither
+	// use ever reaches hashed content. A determinism test that cares
+	// about either value passes its own Clock, exactly like every other
 	// package that takes one.
 	Clock clock.Clock
+
+	// WatchdogTimeout is how long, in nanoseconds, a Block subscriber
+	// may hold the writer at the barrier with no progress before it is
+	// evicted. Zero disables the watchdog: the writer then waits for a
+	// stalled Block subscriber forever, which is the right default for
+	// tests and for SimClock-driven determinism runs, where "no
+	// progress" has no meaning. See docs/backpressure.md and
+	// docs/clock.md for why this is the one documented exception to
+	// "time.Now appears exactly once."
+	WatchdogTimeout int64
 }
 
 // Ring is the fan-out core: one shared, fixed-capacity buffer written by
@@ -87,8 +98,9 @@ type Ring struct {
 	// ctrl is the join/leave control queue. See lifecycle.go.
 	ctrl controlQueue
 
-	clk    clock.Clock
-	slipNs atomic.Int64
+	clk             clock.Clock
+	slipNs          atomic.Int64
+	watchdogTimeout int64
 }
 
 // NewRing returns a Ring with the given configuration. The arena is
@@ -115,6 +127,8 @@ func NewRing(cfg Config) (*Ring, error) {
 		slots:     make([]slot, cfg.Capacity),
 		blobs:     make([]atomic.Uint64, blobWords*cfg.Capacity),
 		clk:       clk,
+
+		watchdogTimeout: cfg.WatchdogTimeout,
 	}, nil
 }
 

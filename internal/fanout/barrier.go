@@ -41,7 +41,8 @@ func (r *Ring) minBlockCursor() uint64 {
 //
 // A departing Block subscriber releases a writer parked here because
 // applyControl runs on every spin iteration, not because of anything
-// special about the wait itself.
+// special about the wait itself. A stalled one that never departs on
+// its own is watchdogTimeout's job, below.
 //
 // The clock is read only on the slow path — never when the barrier
 // passes immediately — so this costs nothing in steady state; see
@@ -57,9 +58,56 @@ func (r *Ring) waitForBlockBarrier(n uint64) {
 	}
 
 	start := r.clk.Now()
+	windowStart := start
 	for r.minBlockCursor() <= threshold {
 		r.applyControl()
+		if r.watchdogTimeout > 0 {
+			now := r.clk.Now()
+			if now-windowStart >= r.watchdogTimeout {
+				r.evictStalledBlockSubscriber(threshold)
+				windowStart = now
+			}
+		}
 		runtime.Gosched()
 	}
 	r.slipNs.Add(r.clk.Now() - start)
+}
+
+// evictStalledBlockSubscriber is the one documented exception to
+// "time.Now appears exactly once, inside RealClock": a Block subscriber
+// that stops reading entirely would otherwise stall the writer forever,
+// and detecting "no progress for a real duration" is not something a
+// simulated clock can stand in for — it is inherently about wall-clock
+// time, the same way internal/clock's own package doc carves out no
+// exception for content or order, only for this kind of out-of-band
+// effect. See docs/clock.md and docs/backpressure.md.
+//
+// This reads through r.clk exactly like PacingSlipNanos does — not a new
+// time.Now call site, the same RealClock the rest of the package already
+// takes — and its only effect is to abort/disconnect one subscriber,
+// never to change any record's content, order, or emit index. Evicting
+// is out of band and, unlike everything else in this package, is
+// therefore the one place a run's outcome is not fully reproducible
+// under RealClock: which subscriber gets evicted, and when, depends on
+// real scheduling. It never affects what any surviving subscriber
+// receives.
+//
+// It evicts the Block subscriber with the smallest cursor — the one
+// actually responsible for this wait — never by iterating in an order
+// that could matter, since exactly one victim is chosen by comparison,
+// not by position.
+func (r *Ring) evictStalledBlockSubscriber(threshold uint64) {
+	var victim *Subscriber
+	min := uint64(math.MaxUint64)
+	for _, s := range r.blocking {
+		if c := s.Cursor(); c <= threshold && c < min {
+			min = c
+			victim = s
+		}
+	}
+	if victim == nil {
+		return
+	}
+	victim.evicted.Store(true)
+	r.unsubscribeNow(victim)
 }

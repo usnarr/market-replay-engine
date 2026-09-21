@@ -84,9 +84,14 @@ type Subscriber struct {
 
 	// cursor is the next emit index this subscriber wants, published
 	// after each successful read for the writer's Block-barrier
-	// min-cursor computation (added in a later commit). This
-	// subscriber's own goroutine is the only writer to it.
+	// min-cursor computation. This subscriber's own goroutine is the
+	// only writer to it.
 	cursor atomic.Uint64
+
+	// evicted is set by the watchdog (see barrier.go) when this
+	// subscriber has held the Block barrier with no progress past its
+	// configured timeout. Checked by this subscriber's own Next.
+	evicted atomic.Bool
 
 	// Owned solely by this subscriber's own goroutine from here down.
 	pos     uint64
@@ -221,13 +226,24 @@ func (r *Ring) findFirstAtOrAfter(t int64, from, to uint64) (uint64, bool) {
 
 // Next returns this subscriber's next delivery, blocking (without
 // reading a clock, and without holding a core through a busy spin) until
-// one is ready or the ring's declared end is reached. It reports false,
-// with a nil error, at a clean end of stream. The error return is not
-// yet used by anything in this package; it is part of Next's contract
-// from the start because a later commit's emit-loop error propagation
-// needs the same signature merge.Merger.Next already uses.
+// one is ready, the ring's declared end is reached, or this subscriber
+// is evicted by the stalled-Block-subscriber watchdog. It reports false,
+// with a nil error, at a clean end of stream, and false with ErrEvicted
+// if the watchdog evicted it — the one error this package's own code
+// ever produces, since eviction is the one place a run's outcome is not
+// fully determined by content and order alone. See docs/backpressure.md.
 func (s *Subscriber) Next() (Delivery, bool, error) {
 	for {
+		// Checked before attempting a read, not after: the ordinary
+		// lapping protocol could technically still serve this
+		// subscriber's stale cursor through a catch-up (whatever now
+		// occupies the slot it wanted), and that would make eviction a
+		// one-time skip rather than the final severing it is meant to
+		// be. Once evicted, this subscriber never receives another
+		// record.
+		if s.evicted.Load() {
+			return Delivery{}, false, ErrEvicted
+		}
 		var rec store.Record
 		blob, gap, hasGap, next, ready := s.ring.next(s.pos, &rec, s.blobBuf)
 		if ready {
