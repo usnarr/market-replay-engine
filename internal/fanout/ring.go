@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"sync/atomic"
 
+	"replay/internal/clock"
 	"replay/internal/store"
 )
 
@@ -50,6 +51,16 @@ type Config struct {
 	// construction-time-sized error, not a runtime one: Write returns
 	// ErrBlobTooLarge rather than truncating or reallocating the arena.
 	MaxBlobBytes int
+
+	// Clock measures how long Write spends parked at the Block barrier,
+	// for the pacing_slip gauge. It defaults to clock.RealClock{} when
+	// left nil — this is not a second exception to "time.Now appears
+	// exactly once": RealClock is the one call site regardless of who
+	// constructs a value of it, and pacing_slip is diagnostic, never
+	// part of hashed content. A determinism test that cares about the
+	// gauge's value passes its own Clock, exactly like every other
+	// package that takes one.
+	Clock clock.Clock
 }
 
 // Ring is the fan-out core: one shared, fixed-capacity buffer written by
@@ -75,6 +86,9 @@ type Ring struct {
 
 	// ctrl is the join/leave control queue. See lifecycle.go.
 	ctrl controlQueue
+
+	clk    clock.Clock
+	slipNs atomic.Int64
 }
 
 // NewRing returns a Ring with the given configuration. The arena is
@@ -88,6 +102,11 @@ func NewRing(cfg Config) (*Ring, error) {
 		return nil, ErrMaxBlobBytes
 	}
 
+	clk := cfg.Clock
+	if clk == nil {
+		clk = clock.RealClock{}
+	}
+
 	blobWords := (cfg.MaxBlobBytes + 7) / 8
 	return &Ring{
 		mask:      uint64(cfg.Capacity - 1),
@@ -95,8 +114,16 @@ func NewRing(cfg Config) (*Ring, error) {
 		maxBlob:   cfg.MaxBlobBytes,
 		slots:     make([]slot, cfg.Capacity),
 		blobs:     make([]atomic.Uint64, blobWords*cfg.Capacity),
+		clk:       clk,
 	}, nil
 }
+
+// PacingSlipNanos reports the cumulative nanoseconds Write has spent
+// parked at the Block barrier. It is zero when no Block subscriber has
+// ever held the writer back. This is what makes a single slow Block
+// subscriber silently turning a fast replay into a much slower one
+// visible to an operator instead of invisible — see docs/backpressure.md.
+func (r *Ring) PacingSlipNanos() int64 { return r.slipNs.Load() }
 
 // Capacity returns the ring's fixed slot count.
 func (r *Ring) Capacity() int { return int(r.mask) + 1 }

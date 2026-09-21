@@ -244,4 +244,3 @@ func TestSubscriberNext(t *testing.T) {
 		}
 	})
 }
-

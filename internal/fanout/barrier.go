@@ -31,25 +31,35 @@ func (r *Ring) minBlockCursor() uint64 {
 // for n currently holds. The first capacity writes never wait, because
 // their slots hold nothing yet.
 //
-// The wait is a Gosched spin, never a clock read and never a select:
-// this project's rule against a multi-clause select in this package
-// (see cmd/lint-determinism's no-multi-select, and
-// internal/merge/merge.go's refill for the same rule applied to the
-// merge stage) means there is no channel-based wake to use instead, and
-// a plain spin that yields the processor is the simplest thing that is
-// still correct. Revisit only with a profile showing it matters.
+// The wait is a Gosched spin, never a select: this project's rule
+// against a multi-clause select in this package (see
+// cmd/lint-determinism's no-multi-select, and internal/merge/merge.go's
+// refill for the same rule applied to the merge stage) means there is no
+// channel-based wake to use instead, and a plain spin that yields the
+// processor is the simplest thing that is still correct. Revisit only
+// with a profile showing it matters.
 //
-// This commit assumes the Block subscriber set is fixed once Subscribe
-// has returned: a later commit's subscriber lifecycle is what makes a
-// departing Block subscriber release a writer parked here.
+// A departing Block subscriber releases a writer parked here because
+// applyControl runs on every spin iteration, not because of anything
+// special about the wait itself.
+//
+// The clock is read only on the slow path — never when the barrier
+// passes immediately — so this costs nothing in steady state; see
+// PacingSlipNanos.
 func (r *Ring) waitForBlockBarrier(n uint64) {
 	capacity := uint64(r.Capacity())
 	if n < capacity {
 		return
 	}
 	threshold := n - capacity
+	if r.minBlockCursor() > threshold {
+		return
+	}
+
+	start := r.clk.Now()
 	for r.minBlockCursor() <= threshold {
 		r.applyControl()
 		runtime.Gosched()
 	}
+	r.slipNs.Add(r.clk.Now() - start)
 }
