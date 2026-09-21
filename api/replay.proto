@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+// Package replay is the wire schema cmd/replayd serves.
+//
+// There is no map<> field anywhere in this file, and there must never
+// be one. Protobuf leaves map field marshaling order undefined, so a map
+// would put nondeterminism back at the one boundary that looks like "a
+// message definition" rather than "code". Where a map would be the
+// obvious shape, use a repeated field in an order this schema states.
+package replay;
+
+option go_package = "replay/api;api";
+
+// ReplayService serves one replay run to any number of subscribers.
+service ReplayService {
+  // Subscribe streams the run's records to one subscriber. The request
+  // fixes the subscriber's backpressure mode, start position and the
+  // run's speed before the first record is delivered; none of the three
+  // can change afterward.
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+}
+
+// Mode is the backpressure mode, explicit at subscribe time. The zero
+// value names neither Block nor Drop and the server rejects it: a
+// default that silently picks one is exactly what this project's
+// backpressure invariant forbids, and proto3's implicit-zero field
+// presence means an unset field is indistinguishable from MODE_BLOCK if
+// MODE_BLOCK were zero. See docs/backpressure.md.
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_BLOCK = 1;
+  MODE_DROP = 2;
+}
+
+// StartAtBeginning selects the first record the ring still holds. It
+// carries no data: a start position with no parameter is still its own
+// oneof case, which is what keeps "which start kind" explicit on the
+// wire instead of inferred from a zero value.
+message StartAtBeginning {}
+
+// StartAtLive selects whatever the write index is when the subscription
+// is registered. It is the one start position this project does not
+// claim is reproducible.
+message StartAtLive {}
+
+// SubscribeRequest opens one subscription.
+message SubscribeRequest {
+  // mode must be MODE_BLOCK or MODE_DROP.
+  Mode mode = 1;
+
+  // start must be set. The four cases mirror internal/fanout's four
+  // StartAt constructors exactly.
+  oneof start {
+    StartAtBeginning beginning = 2;
+    int64 exchange_ts = 3;
+    uint64 emit_index = 4;
+    StartAtLive live = 5;
+  }
+
+  // speed_num / speed_den is the replay speed as an exact rational:
+  // 1/1 is real time, 10000/1 is ten thousand times real time. It is
+  // two int64 fields and never a double, for the reason internal/fanout
+  // .Speed exists at all — Go fuses floating-point multiply-add on some
+  // architectures and not others, so the same double could schedule a
+  // record differently on two machines, and pacing decides when a Drop
+  // subscriber is lapped. There is no float anywhere in this schema.
+  // See docs/clock.md.
+  int64 speed_num = 6;
+  int64 speed_den = 7;
+}
+
+// Level is one price level of a snapshot. Price and size are scaled
+// integers, never floats: a double can be NaN, which is not equal to
+// itself and breaks both the comparator and the hash.
+message Level {
+  int64 price = 1;
+  int64 size = 2;
+}
+
+// Record is one replayed event, projected field by field. The numeric
+// widths are proto3's, wider than the format's own: venue_id,
+// record_type, side_flags and level_count are a uint16, two bytes and a
+// uint16 on disk. The values are the format's own, unchanged, so a
+// client can rebuild the canonical projection from this message alone.
+// See docs/format.md.
+message Record {
+  int64 exchange_ts = 1;
+  uint64 sequence_number = 2;
+  uint32 instrument_id = 3;
+  uint32 venue_id = 4;
+  uint32 record_type = 5;
+  uint32 side_flags = 6;
+  int64 price = 7;
+  int64 size = 8;
+
+  // level_count, levels and bid_count are set only for a snapshot
+  // pointer. levels holds every level already decoded, bids first and
+  // then asks, in the order the snapshot stores them — never the raw
+  // blob bytes, which would nest this project's private binary format
+  // inside its public schema and leave every client to parse it.
+  uint32 level_count = 9;
+  repeated Level levels = 10;
+  uint32 bid_count = 11;
+}
+
+// SubscribeResponse is one delivery: a record, and the gap that
+// immediately preceded it when the writer had already lapped this
+// subscriber. One response per delivery, mirroring
+// internal/fanout.Delivery.
+message SubscribeResponse {
+  Record record = 1;
+
+  // has_gap says whether the three fields below mean anything. The gap
+  // unit is the run's global emit index, never a venue sequence number:
+  // a gap in a merged multi-venue stream spans several venues and has
+  // no single sequence range that describes it. missed_count is always
+  // last_missed_index - first_missed_index + 1. A gap is delivery
+  // framing and is never part of the canonical hash. See
+  // docs/backpressure.md.
+  bool has_gap = 2;
+  uint64 first_missed_index = 3;
+  uint64 last_missed_index = 4;
+  uint64 missed_count = 5;
+}

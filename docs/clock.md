@@ -83,7 +83,7 @@ q, _ := bits.Div64(hi, lo, uint64(num))
 
 `bits.Div64` panics for `y == 0` (division by zero) or `y <= hi` (quotient overflow). The single comparison `hi >= uint64(num)` closes both at once: for the overflow case it is exactly that predicate, and for `num == 0` (reachable only through the zero `Speed{}` value, since `NewSpeed` rejects it) `hi >= 0` is always true for an unsigned `hi`, so the saturating return fires before `bits.Div64` is ever called. Do not "simplify" this guard by adding a separate `num > 0` check first — it would be redundant with what this one comparison already covers. A `ts` at or before `base` returns `t0` unchanged; a schedule too far in the future saturates at `math.MaxInt64` rather than wrapping, on both the quotient and the final addition to `t0`.
 
-There is no float input to this package's API at all. The one float boundary in this project is `cmd/replayd`'s gRPC `speed` request field, which converts to a `Speed` and validates once, at that one boundary — see `10-replayd-grpc.md`.
+There is no float input to this package's API at all, and there is no float boundary anywhere else in the project either. `cmd/replayd`'s gRPC `Subscribe` request carries `speed_num` and `speed_den` as two `int64` fields (`api/replay.proto`), handed straight to `NewSpeed`, which validates them once at that one boundary. A `double` on the wire would put the architecture-dependent rounding hazard above back one layer out, where it would be harder to see and no less real — the schema is where a float looks most like a harmless convenience.
 
 ## The delivery schedule is absolute and is never re-anchored
 

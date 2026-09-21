@@ -1,7 +1,7 @@
 # See CLAUDE.md for the invariants these targets enforce.
 # See plans/01-repo-and-toolchain.md (not committed) for the design behind this file.
 
-.PHONY: test bench determinism profile lint fuzz
+.PHONY: test bench determinism profile lint fuzz proto
 
 # Full suite with -race. Covers internal/... and cmd/replayd, plus
 # cmd/lint-determinism (a separate module, run from inside its own
@@ -88,3 +88,25 @@ lint:
 # not per-commit.
 fuzz:
 	go test -fuzz=FuzzDecode -fuzztime=30s ./internal/store/...
+
+# Regenerates api/replay.pb.go and api/replay_grpc.pb.go from
+# api/replay.proto, which is the source of truth for both. The
+# generated files are committed, so this target only has to run when
+# the schema changes -- but it must run then, and its output must be
+# committed in the same commit as the .proto change.
+#
+# buf, not protoc: buf bundles its own compiler as a pure Go binary, so
+# generating needs no C++ protoc and no system package manager. The
+# three tools install into $(go env GOPATH)/bin, which must be on PATH.
+# See buf.yaml and buf.gen.yaml for the module layout and the plugin
+# configuration. The plugin versions are pinned, not @latest: a floating
+# generator would rewrite committed files on an unrelated commit.
+PROTOC_GEN_GO_VERSION      ?= v1.36.12
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
+
+proto:
+	go install github.com/bufbuild/buf/cmd/buf@latest
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+	buf lint
+	buf generate

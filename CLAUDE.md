@@ -18,7 +18,7 @@ When you make a change that affects a doc, update it in the same MR. Docs explai
 ## Tech Stack
 
 - **Language**: Go 1.23+
-- **Dependencies**: kept minimal. stdlib first. `google/go-cmp` for tests, `grpc-go` for the streaming API, `prometheus/client_golang` for metrics. The server module (this one) carries exactly these three. `cmd/convert` and `cmd/catalogue` are separate Go modules with their own dependencies — see `docs/no-database.md`.
+- **Dependencies**: kept minimal. stdlib first. `google/go-cmp` for tests, `grpc-go` for the streaming API, `prometheus/client_golang` for metrics. The server module (this one) carries exactly these three chosen dependencies, plus `google.golang.org/protobuf`, which is a direct require only because `grpc-go`'s own code generator emits `protoreflect`/`protoimpl` imports into `api/replay.pb.go` — it is a consequence of choosing `grpc-go`, not a fourth independent choice. `cmd/convert` and `cmd/catalogue` are separate Go modules with their own dependencies — see `docs/no-database.md`.
 - **Storage**: memory-mapped custom binary format (hot tier), Parquet (archive tier), SQLite (run catalogue and benchmark history only)
 - **CI**: GitHub Actions — `-race`, `go vet`, determinism test, benchmark regression
 

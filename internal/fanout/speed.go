@@ -17,9 +17,12 @@ import (
 // dependent too — a real, user-visible nondeterminism, not a
 // theoretical one. See docs/clock.md.
 //
-// There is no float input to this package at all. The one float
-// boundary in this project is cmd/replayd's gRPC speed request field,
-// which converts to a Speed and validates once, at that one boundary.
+// There is no float input to this package at all, and no float
+// boundary anywhere else in the project either: cmd/replayd's gRPC
+// Subscribe request carries speed_num and speed_den as two int64
+// fields, which go straight to NewSpeed. A double on the wire would
+// reintroduce exactly the rounding hazard this type exists to remove,
+// one layer out. See api/replay.proto and docs/clock.md.
 type Speed struct {
 	num int64
 	den int64

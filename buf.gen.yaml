@@ -1,0 +1,13 @@
+# Code generation for api/replay.proto. Run it with `make proto`.
+#
+# paths=source_relative keeps the generated file beside the schema it
+# came from (api/replay.pb.go, api/replay_grpc.pb.go) instead of under a
+# directory tree derived from go_package.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: api
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: api
+    opt: paths=source_relative
