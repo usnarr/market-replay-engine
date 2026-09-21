@@ -16,4 +16,5 @@ var (
 	ErrStartLapped  = errors.New("fanout: a Block subscriber cannot start before the oldest record still in the ring")
 	ErrClosed       = errors.New("fanout: ring is closed")
 	ErrEvicted      = errors.New("fanout: subscriber was evicted for making no progress at the Block barrier")
+	ErrInvalidSpeed = errors.New("fanout: speed must be a positive rational num/den")
 )
