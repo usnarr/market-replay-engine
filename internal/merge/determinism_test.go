@@ -2,8 +2,6 @@ package merge
 
 import (
 	"encoding/hex"
-	"math/rand/v2"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -12,123 +10,30 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"replay/internal/store"
+	"replay/internal/synth"
 )
 
-const (
-	// synthSeed fixes the generated dataset. It is part of the fixture,
-	// not a source of variation: two runs must build the same bytes.
-	synthSeed = 0x5EED
-
-	// synthSnapshotEvery is the snapshot epoch cadence, in records per
-	// venue. It is not a multiple of the 1024-record block size, so an
-	// epoch lands at a different offset in each block.
-	synthSnapshotEvery = 150
-)
-
-// synthShape gives the record count of every venue's day files. The
-// counts differ on purpose: venues end at different times, one day file
-// is empty, one venue is a single short day, and the last venue has no
-// files at all. Together they cover every case the tree's sentinel
-// handling has to carry.
-var synthShape = [][]int{
-	{1500, 1200, 900},
-	{800, 0, 1100},
-	{2000, 300},
-	{90},
-	{},
-}
-
-// synthDataset is a generated multi-venue dataset on disk, partitioned
-// by venue and day — the granularity cmd/convert produces.
+// synthDataset adds this package's own cursor-opening step to a
+// generated synth.Dataset. Generation itself — the shape, the seed, the
+// byte-for-byte content — lives in internal/synth, shared with
+// internal/fanout's own determinism suite so the two never carry two
+// copies of the same fixture generator that could silently drift apart.
 type synthDataset struct {
-	shape  [][]int
-	venues []uint16
-	files  [][]string
+	*synth.Dataset
 }
 
 // buildSynthDataset writes the standard dataset and returns it.
-// Generation is a pure function of synthSeed and the shape.
 func buildSynthDataset(t *testing.T) *synthDataset {
 	t.Helper()
 
-	return buildDataset(t, synthShape)
+	return &synthDataset{synth.Standard(t, t.TempDir())}
 }
 
+// buildDataset writes a dataset with the given shape and returns it.
 func buildDataset(t *testing.T, shape [][]int) *synthDataset {
 	t.Helper()
 
-	dir := t.TempDir()
-	ds := &synthDataset{
-		shape:  shape,
-		venues: make([]uint16, len(shape)),
-		files:  make([][]string, len(shape)),
-	}
-
-	for v, days := range shape {
-		venue := uint16(v + 1)
-		ds.venues[v] = venue
-
-		rng := rand.New(rand.NewPCG(synthSeed, uint64(venue)))
-		ts := int64(v) * 7 // venues overlap in time but do not start together
-		seq := uint64(0)
-		written := 0
-
-		for d, count := range days {
-			path := filepath.Join(dir, "venue"+strconv.Itoa(int(venue))+"-day"+strconv.Itoa(d)+".bin")
-			w, err := store.NewWriter(path, venue, 100)
-			if err != nil {
-				t.Fatalf("NewWriter(%s) error = %v, want nil", path, err)
-			}
-
-			for i := 0; i < count; i++ {
-				// The timestamp may stand still, so a run of equal
-				// timestamps straddles block and file boundaries. The
-				// sequence number always increases, which is what keeps
-				// the key strictly increasing.
-				ts += rng.Int64N(4)
-				rec := store.Record{
-					ExchangeTs:     ts,
-					SequenceNumber: seq,
-					InstrumentID:   rng.Uint32N(8),
-					VenueID:        venue,
-				}
-				seq++
-
-				if written%synthSnapshotEvery == 0 {
-					bids := []store.Level{{Price: 100, Size: 1 + rng.Int64N(9)}, {Price: 99, Size: 1 + rng.Int64N(9)}}
-					asks := []store.Level{{Price: 101, Size: 1 + rng.Int64N(9)}}
-					err = w.WriteSnapshot(rec, bids, asks)
-				} else {
-					rec.RecordType = store.RecordTypeDelta
-					rec.SideFlags = uint8(rng.UintN(2))
-					rec.Price = 100 + rng.Int64N(50)
-					rec.Size = 1 + rng.Int64N(10)
-					err = w.WriteRecord(rec)
-				}
-				if err != nil {
-					t.Fatalf("writing venue %d day %d record %d: %v", venue, d, i, err)
-				}
-				written++
-			}
-
-			if err := w.Close(); err != nil {
-				t.Fatalf("Close(%s) error = %v, want nil", path, err)
-			}
-			ds.files[v] = append(ds.files[v], path)
-		}
-	}
-	return ds
-}
-
-// recordCount is how many records the dataset holds in total.
-func (ds *synthDataset) recordCount() int {
-	n := 0
-	for _, days := range ds.shape {
-		for _, count := range days {
-			n += count
-		}
-	}
-	return n
+	return &synthDataset{synth.Build(t, t.TempDir(), shape)}
 }
 
 // openCursors opens one cursor per venue, in the given venue order. The
@@ -138,13 +43,13 @@ func (ds *synthDataset) openCursors(t *testing.T, order []uint16) []*Cursor {
 
 	cursors := make([]*Cursor, 0, len(order))
 	for _, venue := range order {
-		v := slices.Index(ds.venues, venue)
+		v := slices.Index(ds.Venues, venue)
 		if v < 0 {
 			t.Fatalf("venue %d is not in the dataset", venue)
 		}
 
-		readers := make([]*store.Reader, 0, len(ds.files[v]))
-		for _, path := range ds.files[v] {
+		readers := make([]*store.Reader, 0, len(ds.Files[v]))
+		for _, path := range ds.Files[v] {
 			r, err := store.Open(path)
 			if err != nil {
 				t.Fatalf("Open(%s) error = %v, want nil", path, err)
@@ -203,7 +108,7 @@ func drainReplay(t *testing.T, ds *synthDataset, m *Merger) replayResult {
 	}()
 
 	h := store.NewCanonicalHasher(store.CanonicalCRC32C)
-	res := replayResult{keys: make([]Key, 0, ds.recordCount())}
+	res := replayResult{keys: make([]Key, 0, ds.RecordCount())}
 	for {
 		ev, ok, err := m.Next()
 		if err != nil {
@@ -232,14 +137,14 @@ func drainReplay(t *testing.T, ds *synthDataset, m *Merger) replayResult {
 // loser tree a venue lands on. M5 adds the worker-count variants.
 func TestDeterminism(t *testing.T) {
 	ds := buildSynthDataset(t)
-	want := replaySynth(t, ds, ds.venues)
+	want := replaySynth(t, ds, ds.Venues)
 
 	t.Run("the_dataset_exercises_what_the_hash_claims_to_cover", func(t *testing.T) {
 		// Guards every case below. A dataset with no snapshots, or one
 		// that fits in a single block, would still compare equal while
 		// testing far less than it appears to.
-		if want.count != ds.recordCount() {
-			t.Fatalf("replayed %d records, want %d", want.count, ds.recordCount())
+		if want.count != ds.RecordCount() {
+			t.Fatalf("replayed %d records, want %d", want.count, ds.RecordCount())
 		}
 		if want.snapshots < 20 {
 			t.Errorf("replayed %d snapshot pointers, want at least 20", want.snapshots)
@@ -259,7 +164,7 @@ func TestDeterminism(t *testing.T) {
 	})
 
 	t.Run("every_venues_own_order_survives_the_merge", func(t *testing.T) {
-		for v, venue := range ds.venues {
+		for v, venue := range ds.Venues {
 			var got []Key
 			for _, key := range want.keys {
 				if key.VenueID == venue {
@@ -279,7 +184,7 @@ func TestDeterminism(t *testing.T) {
 			t.Run("gomaxprocs_"+strconv.Itoa(procs), func(t *testing.T) {
 				runtime.GOMAXPROCS(procs)
 
-				got := replaySynth(t, ds, ds.venues)
+				got := replaySynth(t, ds, ds.Venues)
 
 				assertSameReplay(t, want, got)
 			})
@@ -289,9 +194,9 @@ func TestDeterminism(t *testing.T) {
 	t.Run("the_hash_does_not_depend_on_which_leaf_a_venue_lands_on", func(t *testing.T) {
 		// Which cursor index a venue gets is an arbitrary choice made
 		// when partitions are discovered. It must not reach the output.
-		for i := 1; i < len(ds.venues); i++ {
+		for i := 1; i < len(ds.Venues); i++ {
 			t.Run("rotated_by_"+strconv.Itoa(i), func(t *testing.T) {
-				order := append(slices.Clone(ds.venues[i:]), ds.venues[:i]...)
+				order := append(slices.Clone(ds.Venues[i:]), ds.Venues[:i]...)
 
 				got := replaySynth(t, ds, order)
 
@@ -306,7 +211,7 @@ func TestDeterminism(t *testing.T) {
 		// that says which worker filled it.
 		for _, workers := range workerCounts {
 			t.Run("workers_"+strconv.Itoa(workers), func(t *testing.T) {
-				got := replaySynthConcurrent(t, ds, ds.venues, workers)
+				got := replaySynthConcurrent(t, ds, ds.Venues, workers)
 
 				assertSameReplay(t, want, got)
 			})
@@ -323,7 +228,7 @@ func TestDeterminism(t *testing.T) {
 				t.Run("gomaxprocs_"+strconv.Itoa(procs)+"_workers_"+strconv.Itoa(workers), func(t *testing.T) {
 					runtime.GOMAXPROCS(procs)
 
-					got := replaySynthConcurrent(t, ds, ds.venues, workers)
+					got := replaySynthConcurrent(t, ds, ds.Venues, workers)
 
 					assertSameReplay(t, want, got)
 				})
@@ -332,9 +237,9 @@ func TestDeterminism(t *testing.T) {
 	})
 
 	t.Run("the_worker_pool_agrees_with_inline_decoding_on_every_venue_order", func(t *testing.T) {
-		for i := 1; i < len(ds.venues); i++ {
+		for i := 1; i < len(ds.Venues); i++ {
 			t.Run("rotated_by_"+strconv.Itoa(i), func(t *testing.T) {
-				order := append(slices.Clone(ds.venues[i:]), ds.venues[:i]...)
+				order := append(slices.Clone(ds.Venues[i:]), ds.Venues[:i]...)
 
 				got := replaySynthConcurrent(t, ds, order, 8)
 
@@ -367,7 +272,7 @@ func readVenueKeys(t *testing.T, ds *synthDataset, v int) []Key {
 	t.Helper()
 
 	var keys []Key
-	for _, path := range ds.files[v] {
+	for _, path := range ds.Files[v] {
 		r, err := store.Open(path)
 		if err != nil {
 			t.Fatalf("Open(%s) error = %v, want nil", path, err)

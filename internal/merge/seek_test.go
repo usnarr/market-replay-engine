@@ -75,10 +75,10 @@ func suffixFrom(full []Event, t int64) []Event {
 // more and nothing less.
 func TestSeekSuffix(t *testing.T) {
 	ds := buildSynthDataset(t)
-	full := replayAllEvents(t, ds.openCursors(t, ds.venues))
+	full := replayAllEvents(t, ds.openCursors(t, ds.Venues))
 
-	if len(full) != ds.recordCount() {
-		t.Fatalf("full replay produced %d events, want %d", len(full), ds.recordCount())
+	if len(full) != ds.RecordCount() {
+		t.Fatalf("full replay produced %d events, want %d", len(full), ds.RecordCount())
 	}
 
 	// Find a target that lands exactly on a snapshot's own timestamp and
@@ -114,7 +114,7 @@ func TestSeekSuffix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			want := suffixFrom(full, tt.t)
 
-			cursors := ds.openCursors(t, ds.venues)
+			cursors := ds.openCursors(t, ds.Venues)
 			for _, c := range cursors {
 				if err := c.SeekTime(tt.t); err != nil {
 					t.Fatalf("SeekTime(%d) error = %v, want nil", tt.t, err)
@@ -137,7 +137,7 @@ func TestSeekSuffix(t *testing.T) {
 // would only show up once a worker pool is involved.
 func TestSeekSuffixWithTheWorkerPool(t *testing.T) {
 	ds := buildSynthDataset(t)
-	full := replayAllEvents(t, ds.openCursors(t, ds.venues))
+	full := replayAllEvents(t, ds.openCursors(t, ds.Venues))
 
 	targets := []int64{
 		full[0].Record.ExchangeTs,
@@ -151,7 +151,7 @@ func TestSeekSuffixWithTheWorkerPool(t *testing.T) {
 
 		for _, workers := range workerCounts {
 			t.Run("t_"+strconv.FormatInt(target, 10)+"_workers_"+strconv.Itoa(workers), func(t *testing.T) {
-				cursors := ds.openCursors(t, ds.venues)
+				cursors := ds.openCursors(t, ds.Venues)
 				for _, c := range cursors {
 					if err := c.SeekTime(target); err != nil {
 						t.Fatalf("SeekTime(%d) error = %v, want nil", target, err)
@@ -193,13 +193,13 @@ func TestSeekSuffixWithTheWorkerPool(t *testing.T) {
 // same check TestDeterminism already does for a plain replay.
 func TestSeekSuffixAcrossVenueOrder(t *testing.T) {
 	ds := buildSynthDataset(t)
-	full := replayAllEvents(t, ds.openCursors(t, ds.venues))
+	full := replayAllEvents(t, ds.openCursors(t, ds.Venues))
 	target := full[len(full)/2].Record.ExchangeTs
 	want := suffixFrom(full, target)
 
-	for i := 1; i < len(ds.venues); i++ {
+	for i := 1; i < len(ds.Venues); i++ {
 		t.Run("rotated_by_"+strconv.Itoa(i), func(t *testing.T) {
-			order := append(append([]uint16{}, ds.venues[i:]...), ds.venues[:i]...)
+			order := append(append([]uint16{}, ds.Venues[i:]...), ds.Venues[:i]...)
 
 			cursors := ds.openCursors(t, order)
 			for _, c := range cursors {

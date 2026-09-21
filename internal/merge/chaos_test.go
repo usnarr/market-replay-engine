@@ -16,14 +16,14 @@ import (
 // goroutine's own loop it happens to be paused.
 func TestDeterminismChaos(t *testing.T) {
 	ds := buildSynthDataset(t)
-	want := replaySynth(t, ds, ds.venues)
+	want := replaySynth(t, ds, ds.Venues)
 
 	chaosSeeds := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
 
 	for _, seed := range chaosSeeds {
 		for _, workers := range workerCounts {
 			t.Run("seed_"+strconv.FormatUint(seed, 10)+"_workers_"+strconv.Itoa(workers), func(t *testing.T) {
-				m, err := newMergerChaos(ds.openCursors(t, ds.venues), workers, seed)
+				m, err := newMergerChaos(ds.openCursors(t, ds.Venues), workers, seed)
 				if err != nil {
 					t.Fatalf("newMergerChaos() error = %v, want nil", err)
 				}
@@ -42,11 +42,11 @@ func TestDeterminismChaos(t *testing.T) {
 // must still match.
 func TestDeterminismChaosAcrossVenueOrder(t *testing.T) {
 	ds := buildSynthDataset(t)
-	want := replaySynth(t, ds, ds.venues)
+	want := replaySynth(t, ds, ds.Venues)
 
-	for i := 1; i < len(ds.venues); i++ {
+	for i := 1; i < len(ds.Venues); i++ {
 		t.Run("rotated_by_"+strconv.Itoa(i), func(t *testing.T) {
-			order := append(append([]uint16{}, ds.venues[i:]...), ds.venues[:i]...)
+			order := append(append([]uint16{}, ds.Venues[i:]...), ds.Venues[:i]...)
 
 			m, err := newMergerChaos(ds.openCursors(t, order), 16, 0x5EED)
 			if err != nil {

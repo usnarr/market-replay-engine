@@ -364,7 +364,7 @@ func TestConcurrentMergerCloseWhileWorkersAreBusy(t *testing.T) {
 	ds := buildDataset(t, [][]int{{20000}, {20000}, {20000}, {20000}, {}})
 
 	for i := 0; i < 20; i++ {
-		m, err := NewConcurrentMerger(ds.openCursors(t, ds.venues), 32)
+		m, err := NewConcurrentMerger(ds.openCursors(t, ds.Venues), 32)
 		if err != nil {
 			t.Fatalf("NewConcurrentMerger() error = %v, want nil", err)
 		}
@@ -413,7 +413,7 @@ func TestConcurrentMergerCloseStopsEveryGoroutine(t *testing.T) {
 			t.Run(tt.name+"_workers_"+strconv.Itoa(workers), func(t *testing.T) {
 				before := runtime.NumGoroutine()
 
-				m, err := NewConcurrentMerger(ds.openCursors(t, ds.venues), workers)
+				m, err := NewConcurrentMerger(ds.openCursors(t, ds.Venues), workers)
 				if err != nil {
 					t.Fatalf("NewConcurrentMerger() error = %v, want nil", err)
 				}
@@ -452,7 +452,7 @@ func TestConcurrentMergerCloseAbandonsTheRestOfTheRun(t *testing.T) {
 
 	const read = 10
 
-	m, err := NewConcurrentMerger(ds.openCursors(t, ds.venues), 8)
+	m, err := NewConcurrentMerger(ds.openCursors(t, ds.Venues), 8)
 	if err != nil {
 		t.Fatalf("NewConcurrentMerger() error = %v, want nil", err)
 	}
@@ -481,14 +481,14 @@ func TestConcurrentMergerCloseAbandonsTheRestOfTheRun(t *testing.T) {
 	// lands, plus one more if it was already choosing a range. Anything
 	// past that means a reader kept going instead of stopping.
 
-	limit := read + len(ds.venues)*(feedBatches+1)*batchRecords
-	if limit >= ds.recordCount() {
+	limit := read + len(ds.Venues)*(feedBatches+1)*batchRecords
+	if limit >= ds.RecordCount() {
 		t.Fatalf("the bound (%d) is not below the dataset size (%d); the fixture proves nothing",
-			limit, ds.recordCount())
+			limit, ds.RecordCount())
 	}
 	if issued > limit {
 		t.Errorf("readers issued %d of %d records after closing at record %d, want at most %d",
-			issued, ds.recordCount(), read, limit)
+			issued, ds.RecordCount(), read, limit)
 	}
 }
 
@@ -496,7 +496,7 @@ func TestConcurrentMergerCloseAfterTheStreamEnds(t *testing.T) {
 	ds := buildSynthDataset(t)
 	before := runtime.NumGoroutine()
 
-	m, err := NewConcurrentMerger(ds.openCursors(t, ds.venues), 8)
+	m, err := NewConcurrentMerger(ds.openCursors(t, ds.Venues), 8)
 	if err != nil {
 		t.Fatalf("NewConcurrentMerger() error = %v, want nil", err)
 	}
