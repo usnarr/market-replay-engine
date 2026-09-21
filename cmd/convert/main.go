@@ -1,7 +1,7 @@
 // Command convert turns an archive-tier Parquet file into the hot-tier
-// binary format internal/store reads. It is an offline tool in its own
-// Go module, so the server module never carries a Parquet reader. See
-// docs/convert.md.
+// binary format internal/store reads, one file per venue and UTC day. It
+// is an offline tool in its own Go module, so the server module never
+// carries a Parquet reader. See docs/convert.md.
 package main
 
 import (
@@ -10,26 +10,34 @@ import (
 	"os"
 )
 
+// defaultPriceScale is the divisor for price and size. The source
+// carries scaled integers and no scale of its own, so the operator
+// states it. Eight decimal places covers every venue this project has
+// been pointed at.
+const defaultPriceScale = 100_000_000
+
 func main() {
 	in := flag.String("in", "", "source Parquet file, in the canonical source schema")
+	out := flag.String("out", "", "directory to write the hot-tier files into")
+	priceScale := flag.Int64("price-scale", defaultPriceScale, "power-of-ten divisor for every price and size")
 	flag.Parse()
 
-	if err := run(*in); err != nil {
+	if err := run(*in, *out, *priceScale); err != nil {
 		fmt.Fprintln(os.Stderr, "convert:", err)
 		os.Exit(1)
 	}
 }
 
-// run checks one source file against the canonical source schema and
-// reports how many rows it holds.
-func run(in string) error {
-	if in == "" {
-		return fmt.Errorf("-in is required")
+func run(in, out string, priceScale int64) error {
+	if in == "" || out == "" {
+		return fmt.Errorf("-in and -out are both required")
 	}
-	rows, err := CheckSourceFile(in)
+	paths, err := Convert(in, out, priceScale)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: %d rows match the canonical source schema\n", in, rows)
+	for _, path := range paths {
+		fmt.Println(path)
+	}
 	return nil
 }

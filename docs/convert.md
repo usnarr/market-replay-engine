@@ -1,6 +1,6 @@
 # The archive-tier converter
 
-Scope: `cmd/convert`'s canonical source Parquet schema, and what it rejects rather than repairs.
+Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, and what it rejects rather than repairs.
 
 See the root [`CLAUDE.md`](../CLAUDE.md) and the documentation index at [`CLAUDE.md`](./CLAUDE.md). The output format is [`format.md`](./format.md).
 
@@ -46,8 +46,26 @@ The eight scalar columns mirror `store.Record`'s public fields one for one, by n
 
 A snapshot row carries its book in the repeated `levels` group. Every other row's group is empty. The alternative — a second Parquet file of levels, joined on the ordering key — would make a snapshot's levels reachable only through a join, and a join is one more place where "the same input" could produce two different orderings.
 
+## One file per venue, per UTC day
+
+**Provisional**, like the schema. `format.md` already requires one venue per file, so only the day half is a choice, and it is the one most market data archives are organized by. It keeps a single file at a size a reader can map without thinking about it. Revisit it once real source data says how the archive is actually laid out.
+
+A file is named `venue-<venue_id>-<YYYY-MM-DD>.bin`. The date, not a day number, because the operator reading a directory listing is looking for a session.
+
+A day boundary is UTC midnight, and the day count floors towards negative infinity rather than towards zero, so the hours before the Unix epoch are the day before it rather than sharing day 0 with the hours after.
+
+The converter holds every partition it has opened in a slice sorted by (venue, day), searched by binary search, never in a map. `cmd/convert` is held to the root `CLAUDE.md`'s ordered-path rule exactly as the replay path is, even though it runs offline: the slice's order is the order files are finalized in and the order their paths are reported in, and a map would make both depend on Go's iteration order.
+
 ## Rejection is by column, never by guess
 
 A source file whose schema is not exactly this one is rejected whole, with a `*SchemaError` naming the first offending column in the canonical schema's own declared order: a missing column, an added column, a column of the wrong type, and a column whose repetition differs are all the same class of fault. Matching in canonical order, rather than over the file's own field map, is what makes two files with the same fault produce the same message.
 
 Nothing is inferred from a near miss. A `float64` `price` column is not "close enough" to an `int64` one, and a `recv_ts` column the canonical schema does not define is not silently dropped — `format.md` excludes capture-time fields from the canonical hash for a reason, and a converter that quietly accepted one would be deciding that question on its own.
+
+A row whose values cannot become a `store.Record` is rejected the same way, with a `*RowError` carrying the row's ordinal in the source file and its ordering key: a `venue_id` that does not fit `uint16`, an undefined `record_type`, a reserved `side_flags` bit, levels on a row that is not a snapshot, a price or size on a row that is, and a level whose side is neither bid nor ask.
+
+A rejected conversion leaves nothing behind. Every file it had opened is aborted and removed, because a half-converted directory is worse than an empty one: nothing downstream can tell it from a complete conversion.
+
+### Level order is normalized, not preserved
+
+A snapshot row's levels are sorted into a bid run and an ask run, bids highest-price first and asks lowest-price first — the order `internal/book` reads them in. Normalizing here makes the blob's bytes a function of the level set alone, and not of the order the source happened to list them in.
