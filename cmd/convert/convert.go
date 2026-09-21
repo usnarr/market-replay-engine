@@ -20,6 +20,17 @@ import (
 // row group in memory.
 const readBatch = 256
 
+// The output file's geometry is pinned here, never read from the host.
+// store.NewWriter would take header_size from os.Getpagesize(), which is
+// 4096 on most hosts and 16384 on Apple silicon, and record 0's offset
+// would then decide where every later byte of the file sits. Two
+// conversions of the same input have to produce the same bytes, so this
+// is a constant. See docs/convert.md.
+const (
+	artifactPageSize         = 4096
+	artifactBlockSizeRecords = 1024
+)
+
 // Row-level rejection classes. A source file that trips any of them is
 // rejected whole: the converter never repairs a row, because a silent
 // repair hides a data problem that has to be fixed upstream. See
@@ -191,7 +202,10 @@ func (c *converter) partition(key PartitionKey) (*partition, error) {
 	}
 
 	path := filepath.Join(c.outDir, key.FileName())
-	w, err := store.NewWriter(path, key.VenueID, c.opts.PriceScale)
+	w, err := store.NewWriterWithOptions(path, key.VenueID, c.opts.PriceScale, store.WriterOptions{
+		PageSize:         artifactPageSize,
+		BlockSizeRecords: artifactBlockSizeRecords,
+	})
 	if err != nil {
 		return nil, err
 	}

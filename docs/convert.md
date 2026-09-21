@@ -1,6 +1,6 @@
 # The archive-tier converter
 
-Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, where it places snapshot epochs, and what it rejects rather than repairs.
+Scope: `cmd/convert`'s canonical source Parquet schema, its venue partitioning policy, where it places snapshot epochs, what makes its artifacts byte-reproducible, and what it rejects rather than repairs.
 
 See the root [`CLAUDE.md`](../CLAUDE.md) and the documentation index at [`CLAUDE.md`](./CLAUDE.md). The output format is [`format.md`](./format.md).
 
@@ -93,6 +93,20 @@ A snapshot pointer's sequence number is therefore converter-assigned, not source
 ### A source whose book cannot be rebuilt is rejected
 
 A Delta that removes a price level the converter has not seen returns `book.ErrLevelNotFound`, and the conversion stops with a `*RowError` naming that row. This is the reject-not-repair rule again: an epoch computed from a book that has already diverged from the venue's is worse than no artifact, because nothing downstream can tell the two apart. A source that starts mid-session therefore has to start from a snapshot per instrument.
+
+## Byte-reproducible artifacts
+
+The same source file, converted twice, produces byte-identical output. This is a requirement, not an aspiration: the whole-file hash in a run manifest identifies an artifact, and an identity that changes when nothing about the data did identifies nothing.
+
+Three things make it true.
+
+**The file geometry is pinned, not taken from the host.** `store.NewWriter` sets `header_size` from `os.Getpagesize()`, which is 4096 on most hosts and 16384 on Apple silicon. Record 0's offset then decides where every later byte sits, so the same input would convert to different bytes on different machines. `cmd/convert` uses `store.NewWriterWithOptions` and pins `header_size` to 4096 and `block_size_records` to 1024 instead. A reader is unaffected: it reads both values out of the header either way.
+
+**Nothing about the output order is timing-dependent.** The converter reads row groups in file order on one goroutine; there is no decode fan-out whose completion order could reach the output. Partitions, books and venues are sorted slices, so the order files are created, epochs assign sequence numbers, and paths are reported in is a function of the data alone.
+
+**Every undefined byte is explicitly zeroed.** That is `internal/store`'s discipline, not this converter's, and `format.md`'s "every byte is defined" rule is what makes it checkable.
+
+`TestConvertIsByteReproducible` converts one source twice into two directories and compares the SHA-256 of every file. `TestConvertPinsTheArtifactLayout` reads `header_size` out of the header directly, because on a host whose page size is already 4096 the first test alone would pass even if the pin were removed.
 
 ## `exchange_ts` is checked, never repaired
 
