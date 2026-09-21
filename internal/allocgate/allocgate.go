@@ -13,17 +13,22 @@
 // helpers.
 package allocgate
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
-// assertRuns is how many times AssertZero calls fn (after
-// testing.AllocsPerRun's own internal warm-up call) when computing the
-// average allocation count. High enough that a single stray allocation
-// among otherwise-zero calls still shows up as a clear nonzero average,
-// not lost to rounding.
+// assertRuns is how many times AssertZero calls fn (after each pass's
+// own warm-up call) when measuring. High enough that a single stray
+// allocation among otherwise-zero calls still shows up as a clear
+// nonzero average, not lost to rounding.
 const assertRuns = 200
 
-// AssertZero fails b unless fn allocates nothing, measured with the
-// standard library's testing.AllocsPerRun.
+// AssertZero fails b unless fn allocates nothing. It measures twice: the
+// allocation count, with the standard library's testing.AllocsPerRun,
+// and the allocated bytes, with bytesPerRun. The project's invariant
+// names both, and the two passes do not see the same things — see
+// bytesPerRun.
 //
 // An earlier version of this gate ran fn inside its own nested
 // testing.Benchmark call, to assert the raw MemAllocs/MemBytes counts
@@ -74,4 +79,46 @@ func AssertZero(b *testing.B, fn func()) {
 	if got := testing.AllocsPerRun(assertRuns, fn); got != 0 {
 		b.Fatalf("allocgate: expected zero allocations, got %.4f allocs/op averaged over %d runs", got, assertRuns)
 	}
+	if got := bytesPerRun(assertRuns, fn); got != 0 {
+		b.Fatalf("allocgate: expected zero bytes allocated, got %d bytes over %d runs", got, assertRuns)
+	}
+}
+
+// bytesPerRun returns how many bytes fn allocates over runs calls. It is
+// testing.AllocsPerRun's own measurement shape — warm up once, read
+// runtime.MemStats, call fn, read again — with TotalAlloc in place of
+// Mallocs, because AllocsPerRun reports a count and has no way to report
+// bytes.
+//
+// It is a second pass over fn rather than a wider reading of the first,
+// for two reasons. AllocsPerRun exposes nothing to read bytes from. And
+// it pins GOMAXPROCS to 1 for its own measurement, so an allocation that
+// appears only when two goroutines genuinely run at once — a contended
+// pool miss, a retry path that boxes — never shows up in the count. This
+// pass leaves GOMAXPROCS alone, so the benchmark's real parallelism is
+// what fn runs under.
+//
+// The GC call settles allocations already pending when the pass starts,
+// including finalizers queued by the benchmark's own setup. There is
+// deliberately no second GC before the final reading: a collection there
+// could run a finalizer inside the measured window and charge its
+// allocation to fn, and ReadMemStats already flushes each P's allocation
+// cache, so a second GC would buy nothing and add noise.
+//
+// TotalAlloc counts the whole process, so another goroutine allocating
+// during the window would be charged to fn. Every call site in this
+// project calls AssertZero with no other goroutine of its own running,
+// and AllocsPerRun's Mallocs reading has carried exactly the same
+// exposure since this gate was written.
+func bytesPerRun(runs int, fn func()) uint64 {
+	fn()
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for i := 0; i < runs; i++ {
+		fn()
+	}
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
 }
