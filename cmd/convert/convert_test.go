@@ -267,3 +267,80 @@ func TestConvertRejectsAnUnconvertibleRow(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertRejectsDecreasingExchangeTs(t *testing.T) {
+	base := int64(day2024) * nanosPerDay
+
+	tests := []struct {
+		name       string
+		rows       []SourceRow
+		wantReject bool
+		wantIndex  int64
+	}{
+		{
+			name: "a_timestamp_that_stands_still",
+			rows: []SourceRow{
+				srcDelta(base+10, 7, 1, 10, store.SideBid, 100, 5),
+				srcDelta(base+10, 7, 2, 10, store.SideBid, 101, 6),
+			},
+		},
+		{
+			name: "two_venues_whose_timestamps_interleave",
+			rows: []SourceRow{
+				srcDelta(base+10, 7, 1, 10, store.SideBid, 100, 5),
+				srcDelta(base+1, 9, 1, 20, store.SideBid, 200, 5),
+				srcDelta(base+11, 7, 2, 10, store.SideBid, 101, 6),
+				srcDelta(base+2, 9, 2, 20, store.SideBid, 201, 6),
+			},
+		},
+		{
+			name: "a_timestamp_that_goes_backwards_within_one_day",
+			rows: []SourceRow{
+				srcDelta(base+10, 7, 1, 10, store.SideBid, 100, 5),
+				srcDelta(base+9, 7, 2, 10, store.SideBid, 101, 6),
+			},
+			wantReject: true,
+			wantIndex:  1,
+		},
+		{
+			name: "a_timestamp_that_goes_back_into_the_previous_day",
+			rows: []SourceRow{
+				srcDelta(base+1, 7, 1, 10, store.SideBid, 100, 5),
+				srcDelta(base+nanosPerDay+1, 7, 2, 10, store.SideBid, 101, 6),
+				srcDelta(base+2, 7, 3, 10, store.SideBid, 102, 7),
+			},
+			wantReject: true,
+			wantIndex:  2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := t.TempDir()
+			src := writeSourceParquet(t, t.TempDir(), "source.parquet", tt.rows)
+
+			_, err := Convert(src, out, testPriceScale)
+
+			if !tt.wantReject {
+				if err != nil {
+					t.Fatalf("Convert() error = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrExchangeTsDecreased) {
+				t.Fatalf("Convert() error = %v, want %v", err, ErrExchangeTsDecreased)
+			}
+			var re *RowError
+			if !errors.As(err, &re) {
+				t.Fatalf("Convert() error = %v, want a *RowError", err)
+			}
+			if re.Index != tt.wantIndex || re.Row.ExchangeTs != tt.rows[tt.wantIndex].ExchangeTs {
+				t.Errorf("Convert() error names row %d (exchange_ts=%d), want row %d (exchange_ts=%d)",
+					re.Index, re.Row.ExchangeTs, tt.wantIndex, tt.rows[tt.wantIndex].ExchangeTs)
+			}
+			if names := dirEntries(t, out); len(names) != 0 {
+				t.Errorf("a rejected conversion left %v behind, want an empty directory", names)
+			}
+		})
+	}
+}

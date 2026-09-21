@@ -66,6 +66,16 @@ A row whose values cannot become a `store.Record` is rejected the same way, with
 
 A rejected conversion leaves nothing behind. Every file it had opened is aborted and removed, because a half-converted directory is worse than an empty one: nothing downstream can tell it from a complete conversion.
 
+## `exchange_ts` is checked, never repaired
+
+`format.md` states that `exchange_ts` is non-decreasing within a venue, and names the converter as what enforces it. The converter tracks each venue's latest timestamp as it walks the source, across that venue's day files and not just within one of them, and rejects the whole conversion the moment one decreases. Equal timestamps are fine: a venue repeats one, and the ordering key's later fields separate two records that share it.
+
+The rejection is a `*RowError` wrapping `ErrExchangeTsDecreased`, naming the row's ordinal in the source file and its ordering key.
+
+**Reject, never re-sort.** Re-sorting on the full ordering key would produce a valid artifact, and the ordering key's values would even be unchanged — but it would also hide an upstream data-quality problem behind an artifact that looks fine. The specification takes the same line for the closely related case of a genuine key collision: a data problem to fix upstream. A repair mode would have to be an explicit opt-in, added only when real data shows one is needed, never the default.
+
+This check is not the writer's duplicate. `store.Writer` rejects a full ordering key that does not strictly increase, which is a different and weaker condition: a record whose `exchange_ts` went backwards while its `sequence_number` kept rising passes the writer and fails here. That is exactly the case `format.md` warns about, where canonical replay order would apply orderbook deltas out of venue-sequence order and silently corrupt the reconstructed book.
+
 ### Level order is normalized, not preserved
 
 A snapshot row's levels are sorted into a bid run and an ask run, bids highest-price first and asks lowest-price first — the order `internal/book` reads them in. Normalizing here makes the blob's bytes a function of the level set alone, and not of the order the source happened to list them in.

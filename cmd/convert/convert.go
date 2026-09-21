@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,11 @@ var (
 	ErrLevelsOnNonSnap  = errors.New("a row that is not a snapshot carries levels")
 	ErrSnapshotFieldSet = errors.New("a snapshot row sets price, size or side_flags")
 	ErrLevelSide        = errors.New("a level's side is neither bid nor ask")
+
+	// ErrExchangeTsDecreased is the one rejection that is about a row's
+	// relation to the rows before it rather than about the row alone.
+	// Rejecting rather than re-sorting is deliberate: see docs/convert.md.
+	ErrExchangeTsDecreased = errors.New("exchange_ts decreased within a venue")
 )
 
 // RowError identifies the one source row a conversion rejected. It
@@ -113,12 +119,27 @@ type converter struct {
 	outDir     string
 	priceScale int64
 	parts      []*partition
+
+	// venues carries the per-venue checks that span a venue's day files,
+	// sorted by venue ID for the same reason parts is sorted.
+	venues []venueState
+}
+
+// venueState is what the converter remembers about one venue across all
+// of its day files.
+type venueState struct {
+	id     uint16
+	lastTs int64
+	seen   bool
 }
 
 // writeRow converts one source row and appends it to its partition.
 func (c *converter) writeRow(index int64, row SourceRow) error {
 	rec, bids, asks, err := recordOf(row)
 	if err != nil {
+		return &RowError{Index: index, Row: row, Err: err}
+	}
+	if err := c.checkExchangeTs(rec); err != nil {
 		return &RowError{Index: index, Row: row, Err: err}
 	}
 	p, err := c.partition(PartitionOf(rec.VenueID, rec.ExchangeTs))
@@ -129,6 +150,27 @@ func (c *converter) writeRow(index int64, row SourceRow) error {
 		return p.w.WriteSnapshot(rec, bids, asks)
 	}
 	return p.w.WriteRecord(rec)
+}
+
+// checkExchangeTs enforces that exchange_ts never decreases within one
+// venue, and records rec's timestamp as that venue's latest. The check
+// spans a venue's day files, not just one of them, because that is the
+// span docs/format.md states the guarantee over. Equal timestamps are
+// fine: a venue repeats one, and the ordering key's later fields are
+// what separate two records that share it.
+func (c *converter) checkExchangeTs(rec store.Record) error {
+	i, found := slices.BinarySearchFunc(c.venues, rec.VenueID, func(v venueState, id uint16) int {
+		return cmp.Compare(v.id, id)
+	})
+	if !found {
+		c.venues = slices.Insert(c.venues, i, venueState{id: rec.VenueID})
+	}
+	v := &c.venues[i]
+	if v.seen && rec.ExchangeTs < v.lastTs {
+		return ErrExchangeTsDecreased
+	}
+	v.lastTs, v.seen = rec.ExchangeTs, true
+	return nil
 }
 
 // partition returns the open file for key, creating it on first use.
