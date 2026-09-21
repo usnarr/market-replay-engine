@@ -107,6 +107,10 @@ type Config struct {
 	// nanoseconds, a stalled Block subscriber may hold the writer back
 	// before it is evicted. Zero disables it.
 	WatchdogTimeout int64
+
+	// ManifestPath is where the run manifest is written when the run
+	// ends. Empty writes none. See manifest.go.
+	ManifestPath string
 }
 
 // metrics is the server's instrument set. Every field is a concrete
@@ -184,13 +188,21 @@ type Server struct {
 	merger  *merge.Merger
 	reg     *prometheus.Registry
 	metrics *metrics
+	dataset []DatasetFile
 
-	mu      sync.Mutex
-	started bool
-	speed   fanout.Speed
-	pacer   *fanout.Pacer
-	runDone chan struct{}
-	runErr  error
+	// clk is the one real clock this command constructs, kept so the
+	// manifest's timing summary is read through the Clock interface
+	// like everything else rather than from a second time.Now.
+	clk clock.Clock
+
+	mu        sync.Mutex
+	started   bool
+	speed     fanout.Speed
+	pacer     *fanout.Pacer
+	startedAt int64
+	mix       SubscriberMix
+	runDone   chan struct{}
+	runErr    error
 }
 
 // NewServer opens cfg's files, builds one cursor per venue, and wires
@@ -229,7 +241,21 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{cfg: cfg, ring: r, merger: m, reg: reg, metrics: mx}, nil
+	dataset, err := datasetIdentity(cfg.Files)
+	if err != nil {
+		_ = m.Close()
+		return nil, err
+	}
+
+	return &Server{
+		cfg:     cfg,
+		ring:    r,
+		merger:  m,
+		reg:     reg,
+		metrics: mx,
+		dataset: dataset,
+		clk:     clock.RealClock{},
+	}, nil
 }
 
 // MetricsHandler serves this run's metrics in Prometheus' own text
@@ -329,7 +355,7 @@ func (s *Server) Subscribe(req *api.SubscribeRequest, stream grpc.ServerStreamin
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	start, err := startFromProto(req)
+	start, startKind, err := startFromProto(req)
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -343,6 +369,7 @@ func (s *Server) Subscribe(req *api.SubscribeRequest, stream grpc.ServerStreamin
 		return subscribeStatus(err)
 	}
 	s.metrics.subscribers.Inc()
+	s.countSubscriber(mode, startKind)
 	defer func() {
 		s.metrics.subscribers.Dec()
 		_ = s.ring.Unsubscribe(sub)
@@ -416,11 +443,37 @@ func (s *Server) attach(mode fanout.BackpressureMode, start fanout.StartAt, spee
 	if !s.started {
 		s.started = true
 		s.speed = speed
-		s.pacer = fanout.NewPacer(clock.RealClock{}, speed)
+		s.startedAt = s.clk.Now()
+		s.pacer = fanout.NewPacer(s.clk, speed)
 		s.runDone = make(chan struct{})
 		go s.run(s.pacer)
 	}
 	return sub, nil
+}
+
+// countSubscriber records one accepted subscription for the run
+// manifest. The start kind comes from the request, not from
+// StartAt.Kind: that method's own constants are unexported, so a
+// caller outside internal/fanout cannot compare against them.
+func (s *Server) countSubscriber(mode fanout.BackpressureMode, startKind string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if mode == fanout.ModeBlock {
+		s.mix.Block++
+	} else {
+		s.mix.Drop++
+	}
+	switch startKind {
+	case startKindBeginning:
+		s.mix.StartBeginning++
+	case startKindExchangeTs:
+		s.mix.StartExchangeTs++
+	case startKindEmitIndex:
+		s.mix.StartEmitIndex++
+	case startKindLive:
+		s.mix.StartLive++
+	}
 }
 
 // run drains the merge into the ring until the stream ends, then
@@ -442,7 +495,56 @@ func (s *Server) run(p *fanout.Pacer) {
 	if cerr := s.merger.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
+	// The manifest records a failed run too: "this run aborted here" is
+	// exactly what a catalogue needs.
+	if merr := s.writeRunManifest(err); merr != nil && err == nil {
+		err = merr
+	}
 	s.runErr = err
+}
+
+// writeRunManifest writes the run manifest, if one was configured. It
+// runs on the emit goroutine once the stream has ended, which is the
+// one moment "as observed at run end" actually names.
+func (s *Server) writeRunManifest(runErr error) error {
+	if s.cfg.ManifestPath == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	startedAt, speed, mix := s.startedAt, s.speed, s.mix
+	s.mu.Unlock()
+
+	ended := s.clk.Now()
+	m := Manifest{
+		Dataset: s.dataset,
+		Config: RunConfig{
+			SpeedNum:             speed.Num(),
+			SpeedDen:             speed.Den(),
+			Workers:              s.cfg.Workers,
+			RingCapacity:         s.cfg.Capacity,
+			MaxBlobBytes:         s.cfg.MaxBlobBytes,
+			WatchdogTimeoutNanos: s.cfg.WatchdogTimeout,
+		},
+		Subscribers: mix,
+		Result: RunResult{
+			EmitIndexAtEnd:  s.ring.WriteIndex(),
+			PacingSlipNanos: s.ring.PacingSlipNanos(),
+		},
+		Timing: Timing{
+			StartedUnixNano: startedAt,
+			EndedUnixNano:   ended,
+			ElapsedNanos:    ended - startedAt,
+		},
+	}
+	if s.cfg.HasSeek {
+		seek := s.cfg.SeekTs
+		m.Config.SeekExchangeTs = &seek
+	}
+	if runErr != nil {
+		m.Result.Error = runErr.Error()
+	}
+	return writeManifest(s.cfg.ManifestPath, m)
 }
 
 // Close stops the run and releases the files it holds. It returns the
@@ -476,20 +578,29 @@ func modeFromProto(m api.Mode) (fanout.BackpressureMode, error) {
 	}
 }
 
-// startFromProto translates the start oneof. The four cases mirror
-// internal/fanout's four StartAt constructors exactly.
-func startFromProto(req *api.SubscribeRequest) (fanout.StartAt, error) {
+// Start-kind names, as the run manifest records them.
+const (
+	startKindBeginning  = "beginning"
+	startKindExchangeTs = "exchange_ts"
+	startKindEmitIndex  = "emit_index"
+	startKindLive       = "live"
+)
+
+// startFromProto translates the start oneof and names which case it
+// was. The four cases mirror internal/fanout's four StartAt
+// constructors exactly.
+func startFromProto(req *api.SubscribeRequest) (fanout.StartAt, string, error) {
 	switch st := req.GetStart().(type) {
 	case *api.SubscribeRequest_Beginning:
-		return fanout.Beginning(), nil
+		return fanout.Beginning(), startKindBeginning, nil
 	case *api.SubscribeRequest_ExchangeTs:
-		return fanout.ExchangeTs(st.ExchangeTs), nil
+		return fanout.ExchangeTs(st.ExchangeTs), startKindExchangeTs, nil
 	case *api.SubscribeRequest_EmitIndex:
-		return fanout.EmitIndex(st.EmitIndex), nil
+		return fanout.EmitIndex(st.EmitIndex), startKindEmitIndex, nil
 	case *api.SubscribeRequest_Live:
-		return fanout.Live(), nil
+		return fanout.Live(), startKindLive, nil
 	default:
-		return fanout.StartAt{}, errStartUnset
+		return fanout.StartAt{}, "", errStartUnset
 	}
 }
 

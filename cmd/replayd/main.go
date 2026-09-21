@@ -60,6 +60,7 @@ func run(args []string) error {
 	maxBlob := fs.Int("max-blob-bytes", 4096, "longest snapshot blob payload the ring will carry")
 	seekTs := fs.Int64("from-ts", 0, "replay only the records at or after this exchange timestamp")
 	watchdog := fs.Int64("watchdog-ns", 0, "evict a Block subscriber that holds the writer this long with no progress; 0 disables")
+	manifest := fs.String("manifest", "", "write the run manifest here when the run ends; empty writes none")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -84,6 +85,7 @@ func run(args []string) error {
 		SeekTs:          *seekTs,
 		HasSeek:         hasSeek,
 		WatchdogTimeout: *watchdog,
+		ManifestPath:    *manifest,
 	})
 	if err != nil {
 		return err
