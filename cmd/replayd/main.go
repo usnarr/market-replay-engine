@@ -93,7 +93,7 @@ func run(args []string) error {
 	}
 	fmt.Fprintln(os.Stdout, "replayd: listening on", lis.Addr().String())
 
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(grpcServerOptions()...)
 	api.RegisterReplayServiceServer(gs, srv)
 
 	stop := make(chan os.Signal, 1)

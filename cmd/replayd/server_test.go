@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"slices"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	"replay/api"
 	"replay/internal/fanout"
@@ -267,6 +271,101 @@ func TestServerSubscribe(t *testing.T) {
 		// different speed from 1/1.
 		if errors.Is(err, errSpeedMismatch) {
 			t.Errorf("attach() at 7/7 after 1/1 error = %v, want anything but errSpeedMismatch: NewSpeed reduces to lowest terms", err)
+		}
+	})
+}
+
+// bufconnBufferSize is the in-memory listener's own buffer. It is not
+// a flow-control window; it only has to be large enough not to become
+// the narrower limit of the two.
+const bufconnBufferSize = 1 << 20
+
+// startTestServer serves srv over an in-memory bufconn listener with
+// the pinned server options, and returns a client dialed with the
+// matching pinned client options. bufconn keeps the real grpc-go
+// client, server, codec, framing and flow control in the test, and
+// leaves only the operating system's sockets out.
+func startTestServer(t *testing.T, srv *Server) api.ReplayServiceClient {
+	t.Helper()
+
+	lis := bufconn.Listen(bufconnBufferSize)
+	gs := grpc.NewServer(grpcServerOptions()...)
+	api.RegisterReplayServiceServer(gs, srv)
+
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		if err := gs.Serve(lis); err != nil {
+			t.Errorf("Serve() error = %v, want nil", err)
+		}
+	}()
+
+	opts := append(grpcDialOptions(),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	conn, err := grpc.NewClient("passthrough:///bufconn", opts...)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("conn.Close() error = %v, want nil", err)
+		}
+		gs.GracefulStop()
+		<-serveDone
+	})
+	return api.NewReplayServiceClient(conn)
+}
+
+func TestGRPCFlowControlWindowsArePinned(t *testing.T) {
+	t.Run("both_initial_windows_clear_the_size_grpc_go_would_ignore", func(t *testing.T) {
+		tests := []struct {
+			name string
+			got  int
+		}{
+			{name: "the_stream_window_is_pinned", got: initialWindowSize},
+			{name: "the_connection_window_is_pinned", got: initialConnWindowSize},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.got < bdpDisableThreshold {
+					t.Errorf("window size = %d, want at least %d: grpc-go ignores a smaller one and keeps estimating",
+						tt.got, bdpDisableThreshold)
+				}
+			})
+		}
+	})
+
+	t.Run("a_pinned_client_and_server_stream_a_whole_run", func(t *testing.T) {
+		dir := t.TempDir()
+		ds := synth.Standard(t, dir)
+		srv := newTestServer(t, testConfig(t, ds))
+		client := startTestServer(t, srv)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		stream, err := client.Subscribe(ctx, blockRequest())
+		if err != nil {
+			t.Fatalf("Subscribe() error = %v, want nil", err)
+		}
+		received := 0
+		for {
+			_, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Recv() error = %v, want nil", err)
+			}
+			received++
+		}
+
+		if received != ds.RecordCount() {
+			t.Errorf("received %d records over a pinned connection, want %d", received, ds.RecordCount())
 		}
 	})
 }

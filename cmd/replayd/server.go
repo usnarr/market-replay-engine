@@ -27,6 +27,56 @@ var (
 	errSpeedMismatch   = errors.New("replayd: the run is already paced at a different speed")
 )
 
+// gRPC flow-control window sizes, pinned explicitly at both ends.
+//
+// Left unset, grpc-go sizes the HTTP/2 flow-control window with a BDP
+// estimator that times its own ping round trips — a real-time read
+// inside the transport, on the path that decides when a Block
+// subscriber's backpressure actually engages. Passing an explicit
+// initial window sets grpc-go's StaticWindowSize, which is what turns
+// that estimator off for the connection's whole life
+// (google.golang.org/grpc/internal/transport: the estimator is
+// constructed only when StaticWindowSize is false).
+//
+// grpc-go ignores an initial window below 64 KiB, so the value has to
+// clear bdpDisableThreshold to mean anything. 1 MiB windows and 512 KiB
+// transport buffers are ordinary values for a high-throughput stream;
+// nothing here depends on the exact number, only on it being pinned
+// rather than estimated. See docs/determinism.md.
+const (
+	initialWindowSize     = 1 << 20
+	initialConnWindowSize = 1 << 20
+	readBufferSize        = 1 << 19
+	writeBufferSize       = 1 << 19
+
+	// bdpDisableThreshold is grpc-go's own default window size, below
+	// which it ignores a configured initial window.
+	bdpDisableThreshold = 65535
+)
+
+// grpcServerOptions returns the options every replayd gRPC server is
+// constructed with. See the window-size constants above.
+func grpcServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.InitialWindowSize(initialWindowSize),
+		grpc.InitialConnWindowSize(initialConnWindowSize),
+		grpc.ReadBufferSize(readBufferSize),
+		grpc.WriteBufferSize(writeBufferSize),
+	}
+}
+
+// grpcDialOptions is the client half of the same pinning. A client that
+// dials without it leaves its own receive window estimated, which puts
+// the real-time read back on the other end of the same stream.
+func grpcDialOptions() []grpc.DialOption {
+	return []grpc.DialOption{
+		grpc.WithInitialWindowSize(initialWindowSize),
+		grpc.WithInitialConnWindowSize(initialConnWindowSize),
+		grpc.WithReadBufferSize(readBufferSize),
+		grpc.WithWriteBufferSize(writeBufferSize),
+	}
+}
+
 // Config is one replay run, fixed before the server serves anything.
 type Config struct {
 	// Files are the hot-tier files to replay, in any order. They are
