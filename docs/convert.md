@@ -56,6 +56,8 @@ A day boundary is UTC midnight, and the day count floors towards negative infini
 
 The converter holds every partition it has opened in a slice sorted by (venue, day), searched by binary search, never in a map. `cmd/convert` is held to the root `CLAUDE.md`'s ordered-path rule exactly as the replay path is, even though it runs offline: the slice's order is the order files are finalized in and the order their paths are reported in, and a map would make both depend on Go's iteration order.
 
+That is enforced, not left to discipline. `cmd/lint-determinism`'s `orderedPath` includes `cmd/convert`, alongside `internal/merge`, `internal/fanout`, `internal/store` and `internal/book`. `make lint` names this package explicitly, because `./...` from the repository root does not cross into a separate module. It does not get `hotPath`'s `any` and `fmt.Sprint` rules: nothing here is on a per-record hot path, and a conversion that allocates is only slower.
+
 ## Rejection is by column, never by guess
 
 A source file whose schema is not exactly this one is rejected whole, with a `*SchemaError` naming the first offending column in the canonical schema's own declared order: a missing column, an added column, a column of the wrong type, and a column whose repetition differs are all the same class of fault. Matching in canonical order, rather than over the file's own field map, is what makes two files with the same fault produce the same message.

@@ -70,6 +70,12 @@ profile:
 # deliberate violations, so running the analyzer against its own
 # module would fail by design.
 #
+# The determinism analyzer also covers cmd/convert, which is in
+# orderedPath's scope (see cmd/lint-determinism/scope.go). ./... from
+# the repo root does not cross into a separate module, so that package
+# is named explicitly. The workspace go.work makes it resolvable from
+# here, so this still needs only one analyzer run.
+#
 # vet's unsafeptr check is disabled for internal/store alone. That
 # package turns the address MapViewOfFile returns into a byte slice,
 # which is the one place in this repository that needs unsafe and is
@@ -81,7 +87,7 @@ lint:
 	go vet $(shell go list ./... | grep -v '^replay/internal/store$$')
 	go vet -unsafeptr=false ./internal/store/...
 	staticcheck ./...
-	go run ./cmd/lint-determinism ./...
+	go run ./cmd/lint-determinism ./... replay/cmd/convert/...
 	cd cmd/lint-determinism && go vet ./... && staticcheck ./...
 	cd cmd/convert && go vet ./... && staticcheck ./...
 

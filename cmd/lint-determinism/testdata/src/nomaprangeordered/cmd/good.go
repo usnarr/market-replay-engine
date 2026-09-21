@@ -1,5 +1,5 @@
-// Package cmd is outside the rule's scope (internal/merge, internal/fanout,
-// internal/store only). Ranging a map here is not flagged.
+// Package cmd is outside the rule's scope: cmd/convert is in it, cmd
+// itself is not. Ranging a map here is not flagged.
 package cmd
 
 func keys(m map[string]int) []string {
