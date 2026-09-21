@@ -513,3 +513,83 @@ func TestNewWriterRejects(t *testing.T) {
 		}
 	})
 }
+
+func TestNewWriterWithOptions(t *testing.T) {
+	hostHeaderSize, err := headerSizeFor(os.Getpagesize())
+	if err != nil {
+		t.Fatalf("headerSizeFor(os.Getpagesize()) error = %v, want nil", err)
+	}
+
+	tests := []struct {
+		name           string
+		opts           WriterOptions
+		wantHeaderSize uint32
+		wantBlockSize  uint32
+		wantErr        error
+	}{
+		{
+			name:           "both_fields_zero_matches_the_host_defaults",
+			wantHeaderSize: hostHeaderSize,
+			wantBlockSize:  defaultBlockSizeRecords,
+		},
+		{
+			name:           "a_pinned_page_size_sets_header_size_on_every_host",
+			opts:           WriterOptions{PageSize: 16384},
+			wantHeaderSize: 16384,
+			wantBlockSize:  defaultBlockSizeRecords,
+		},
+		{
+			name:           "a_pinned_block_size_leaves_header_size_on_the_host_default",
+			opts:           WriterOptions{BlockSizeRecords: 8},
+			wantHeaderSize: hostHeaderSize,
+			wantBlockSize:  8,
+		},
+		{
+			name:           "both_fields_pinned",
+			opts:           WriterOptions{PageSize: 4096, BlockSizeRecords: 2},
+			wantHeaderSize: 4096,
+			wantBlockSize:  2,
+		},
+		{
+			name:    "a_negative_page_size",
+			opts:    WriterOptions{PageSize: -1},
+			wantErr: ErrPageSize,
+		},
+		{
+			name:    "a_block_size_over_the_maximum",
+			opts:    WriterOptions{BlockSizeRecords: maxBlockSizeRecords + 1},
+			wantErr: ErrBlockSize,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "venue.rpl")
+
+			w, err := NewWriterWithOptions(path, testVenue, testPriceScale, tt.opts)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("NewWriterWithOptions(%+v) error = %v, want %v", tt.opts, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewWriterWithOptions(%+v) error = %v, want nil", tt.opts, err)
+			}
+			if err := w.WriteRecord(delta(1000, 1, 10)); err != nil {
+				t.Fatalf("WriteRecord() error = %v, want nil", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatalf("Close() error = %v, want nil", err)
+			}
+			_, h := readFinalized(t, path)
+			if h.HeaderSize != tt.wantHeaderSize {
+				t.Errorf("NewWriterWithOptions(%+v) header_size = %d, want %d", tt.opts, h.HeaderSize, tt.wantHeaderSize)
+			}
+			if h.BlockSizeRecords != tt.wantBlockSize {
+				t.Errorf("NewWriterWithOptions(%+v) block_size_records = %d, want %d", tt.opts, h.BlockSizeRecords, tt.wantBlockSize)
+			}
+		})
+	}
+}

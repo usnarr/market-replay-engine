@@ -31,8 +31,9 @@ const (
 	writerAborted
 )
 
-// writerOptions carries the two geometry knobs a test needs to set.
-// Production code uses NewWriter, which fills them from the host.
+// writerOptions carries the two geometry knobs, already resolved: no
+// field is ever zero here. WriterOptions is the exported form, where a
+// zero field means "use the default".
 type writerOptions struct {
 	pageSize         int
 	blockSizeRecords uint32
@@ -76,11 +77,40 @@ type Writer struct {
 	state writerState
 }
 
+// WriterOptions pins the file geometry NewWriter otherwise reads from
+// the host. A zero field takes NewWriter's own default, so the two
+// constructors agree by construction.
+type WriterOptions struct {
+	// PageSize is what record 0's offset is aligned to: header_size is
+	// PageSize rounded up to cover the defined header fields. Zero means
+	// this host's os.Getpagesize().
+	PageSize int
+
+	// BlockSizeRecords is how many records one checksummed block covers.
+	// Zero means this package's default.
+	BlockSizeRecords uint32
+}
+
 // NewWriter creates path and prepares it for venueID. It fails if path
 // already exists: a half-written file from a crashed run is evidence,
 // not something to silently overwrite.
 func NewWriter(path string, venueID uint16, priceScale int64) (*Writer, error) {
 	return newWriter(path, venueID, priceScale, defaultWriterOptions())
+}
+
+// NewWriterWithOptions is NewWriter with the file geometry pinned rather
+// than read from the host. cmd/convert pins both fields so that two
+// conversions of the same input produce byte-identical artifacts on
+// hosts whose page sizes differ. See docs/format.md.
+func NewWriterWithOptions(path string, venueID uint16, priceScale int64, opts WriterOptions) (*Writer, error) {
+	internal := defaultWriterOptions()
+	if opts.PageSize != 0 {
+		internal.pageSize = opts.PageSize
+	}
+	if opts.BlockSizeRecords != 0 {
+		internal.blockSizeRecords = opts.BlockSizeRecords
+	}
+	return newWriter(path, venueID, priceScale, internal)
 }
 
 func newWriter(path string, venueID uint16, priceScale int64, opts writerOptions) (*Writer, error) {
