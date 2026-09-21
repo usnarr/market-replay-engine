@@ -93,6 +93,14 @@ type Subscriber struct {
 	// configured timeout. Checked by this subscriber's own Next.
 	evicted atomic.Bool
 
+	// canceled is set by Cancel, from any goroutine, when this one
+	// subscriber is to stop. It is a second flag rather than a second
+	// meaning for evicted, so the two out-of-band stops stay
+	// distinguishable in the error a caller receives. Both are one-way:
+	// neither is ever cleared, so no ordering between them can produce a
+	// state Next reads inconsistently.
+	canceled atomic.Bool
+
 	// Owned solely by this subscriber's own goroutine from here down.
 	pos     uint64
 	blobBuf []byte
@@ -105,6 +113,14 @@ func (s *Subscriber) Mode() BackpressureMode { return s.mode }
 // from any goroutine; only this subscriber's own goroutine ever advances
 // it.
 func (s *Subscriber) Cursor() uint64 { return s.cursor.Load() }
+
+// Cancel stops this one subscriber: its current or next call to Next
+// returns ErrCanceled, and every call after that does too. It is safe to
+// call from any goroutine, any number of times, and it never affects
+// what any other subscriber receives. It does not remove s from the
+// Block barrier, so a caller stopping a Block subscriber for good calls
+// Ring.Unsubscribe, which does both. See docs/backpressure.md.
+func (s *Subscriber) Cancel() { s.canceled.Store(true) }
 
 // Subscribe registers a new subscriber against r, starting at the
 // position start names, with the given backpressure mode. Before
@@ -227,22 +243,28 @@ func (r *Ring) findFirstAtOrAfter(t int64, from, to uint64) (uint64, bool) {
 // Next returns this subscriber's next delivery, blocking (without
 // reading a clock, and without holding a core through a busy spin) until
 // one is ready, the ring's declared end is reached, or this subscriber
-// is evicted by the stalled-Block-subscriber watchdog. It reports false,
-// with a nil error, at a clean end of stream, and false with ErrEvicted
-// if the watchdog evicted it — the one error this package's own code
-// ever produces, since eviction is the one place a run's outcome is not
-// fully determined by content and order alone. See docs/backpressure.md.
+// is stopped out of band. It reports false, with a nil error, at a clean
+// end of stream, false with ErrEvicted if the stalled-Block-subscriber
+// watchdog evicted it, and false with ErrCanceled if Cancel was called.
+// Those two are the only errors this package's own code ever produces,
+// because they are the two places a run's outcome is not fully
+// determined by content and order alone. See docs/backpressure.md.
 func (s *Subscriber) Next() (Delivery, bool, error) {
 	for {
-		// Checked before attempting a read, not after: the ordinary
-		// lapping protocol could technically still serve this
-		// subscriber's stale cursor through a catch-up (whatever now
-		// occupies the slot it wanted), and that would make eviction a
+		// Both stops are checked before attempting a read, not after:
+		// the ordinary lapping protocol could technically still serve
+		// this subscriber's stale cursor through a catch-up (whatever
+		// now occupies the slot it wanted), and that would make a stop a
 		// one-time skip rather than the final severing it is meant to
-		// be. Once evicted, this subscriber never receives another
-		// record.
+		// be. Once stopped, this subscriber never receives another
+		// record. Eviction is tested first so a subscriber that is both
+		// reports the same error every time, by the order of these two
+		// lines rather than by which flag happened to be stored first.
 		if s.evicted.Load() {
 			return Delivery{}, false, ErrEvicted
+		}
+		if s.canceled.Load() {
+			return Delivery{}, false, ErrCanceled
 		}
 		var rec store.Record
 		blob, gap, hasGap, next, ready := s.ring.next(s.pos, &rec, s.blobBuf)

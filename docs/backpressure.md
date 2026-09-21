@@ -73,6 +73,16 @@ There is no pacing schedule to compare against yet — that is `08-pacing.md`'s 
 
 `SetEnd` closes the control queue in the same call, failing any request still pending with `ErrClosed`, so "the stream has ended" is one call rather than two things a caller has to remember to do together.
 
+### Leaving releases a parked reader
+
+Removing a subscriber from the barrier is not enough on its own. `Subscriber.Next` parks until a record is ready, the ring ends, or the subscriber is stopped, so a subscriber that only left the barrier would keep spinning in `Next` until the whole ring ended — and a `Drop` subscriber, which was never on the barrier's list at all, would see no effect from leaving whatsoever. A client that disconnects mid-stream is exactly that case, and it must not need the run to finish before its reader goroutine can return.
+
+`Subscriber.Cancel` is the out-of-band stop for one subscriber. It sets a second one-way flag beside the watchdog's eviction flag, and `Next` tests both before every read attempt, so `Cancel` returns `ErrCanceled` from the current parked call and from every call after it. `Ring.Unsubscribe` calls it on the subscriber it removes, **after** the removal has been applied on every return path: the reverse order would leave a canceled subscriber registered on the barrier with a cursor that has stopped advancing, which is precisely what the writer waits on forever.
+
+Cancellation is out of band in the same sense eviction is, and for the same reason it is safe: the flag is read only by the canceled subscriber's own `Next`, it never changes any record's content, order, or emit index, and every other subscriber's stream is byte-identical to a run where nothing was ever canceled. The two flags are independent and neither is ever cleared, so no interleaving of `Cancel` and an eviction can produce a state `Next` reads inconsistently; a subscriber that is both reports `ErrEvicted`, fixed by the order of the two checks rather than by which store landed first.
+
+`Cancel` alone does not unregister a `Block` subscriber. A caller that stops one for good calls `Unsubscribe`, which does both.
+
 ### `StartAt` and reproducibility
 
 `Beginning()`, `ExchangeTs(t)`, and `EmitIndex(i)` are fully reproducible for a subscriber joining **before the first event is emitted** — the same starting content every run. `EmitIndex(i)` stays exactly reproducible even for a **mid-run** join: it pins content directly, and if `i` has already been overwritten the ordinary lapping protocol reports the precise gap on the first read, with no special-casing needed at Subscribe time. `Beginning()`/`ExchangeTs(t)` resolved mid-run instead depend on when the joining goroutine's request happens to be applied, which is a wall-clock artifact. `Live()` is never reproducible, by definition — it means "wherever the write index currently is."
@@ -81,7 +91,7 @@ A Block subscriber whose resolved start position has already been overwritten is
 
 ## The stalled-Block-subscriber watchdog
 
-A Block subscriber that stops reading entirely — a crashed client, a network partition — would otherwise stall the writer forever: nothing else in this package ever forces a Block subscriber out. `Config.WatchdogTimeout` (nanoseconds; zero disables it) is how long the writer will wait at the barrier with no progress from the subscriber actually responsible before evicting it and moving on.
+A Block subscriber that stops reading entirely — a crashed client, a network partition — would otherwise stall the writer forever: nothing else in this package forces a Block subscriber out *on its own*. `Unsubscribe` above needs a caller who has already noticed, and the case the watchdog exists for is precisely the one where nobody has. `Config.WatchdogTimeout` (nanoseconds; zero disables it) is how long the writer will wait at the barrier with no progress from the subscriber actually responsible before evicting it and moving on.
 
 The check lives inside `waitForBlockBarrier`'s own spin loop: each iteration that finds the barrier still blocked reads `Config.Clock` (see `docs/clock.md` for why this is not a new exception to the `time.Now` invariant) and compares elapsed time against the timeout, restarting its own window after each eviction so a second stalled subscriber gets its own full timeout rather than being evicted immediately by a stale window. The victim is always the Block subscriber with the smallest cursor — the one actually responsible for the wait — never chosen by iteration position.
 

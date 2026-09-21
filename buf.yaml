@@ -1,0 +1,24 @@
+# buf configuration, at the repository root rather than in api/, so
+# `buf lint` and `buf generate` run from the same directory every other
+# tool in this repository runs from. The one module lives in api/.
+#
+# buf bundles its own pure-Go protobuf compiler, so generating this
+# repository's wire types needs no C++ protoc and no system package.
+# See the Makefile's proto target.
+version: v2
+modules:
+  - path: api
+lint:
+  use:
+    - STANDARD
+  except:
+    # Both rules govern a versioned schema tree (api/replay/v1/foo.proto
+    # with package replay.v1). This repository has exactly one schema
+    # file, at the fixed path plans/10-replayd-grpc.md names, and no
+    # second version to keep apart from the first. Every other STANDARD
+    # rule stays on.
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_VERSION_SUFFIX
+breaking:
+  use:
+    - FILE

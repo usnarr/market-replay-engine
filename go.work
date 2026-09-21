@@ -1,8 +1,10 @@
-go 1.23
+go 1.23.0
+
+toolchain go1.23.4
 
 use (
 	.
-	./cmd/convert
 	./cmd/catalogue
+	./cmd/convert
 	./cmd/lint-determinism
 )
