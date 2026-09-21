@@ -154,26 +154,32 @@ func runFanout(t *testing.T, ds *synth.Dataset, workers, capacity, nBlock, nDrop
 	blocked = make([]subResult, nBlock)
 	dropped = make([]subResult, nDrop)
 	for i, s := range blockSubs {
+		// perturb is called here, in registration order, on this single
+		// goroutine -- never inside the spawned goroutine below. Calling
+		// it there raced every subscriber's factory call against every
+		// other's on the shared per-seed counter perturb closes over,
+		// and made the resulting id depend on goroutine-start order
+		// besides, defeating the determinism this test relies on.
+		var p func()
+		if perturb != nil {
+			p = perturb()
+		}
 		wg.Add(1)
-		go func(i int, s *Subscriber) {
+		go func(i int, s *Subscriber, p func()) {
 			defer wg.Done()
-			var p func()
-			if perturb != nil {
-				p = perturb()
-			}
 			blocked[i] = drainSubscriber(t, s, p)
-		}(i, s)
+		}(i, s, p)
 	}
 	for i, s := range dropSubs {
+		var p func()
+		if perturb != nil {
+			p = perturb()
+		}
 		wg.Add(1)
-		go func(i int, s *Subscriber) {
+		go func(i int, s *Subscriber, p func()) {
 			defer wg.Done()
-			var p func()
-			if perturb != nil {
-				p = perturb()
-			}
 			dropped[i] = drainSubscriber(t, s, p)
-		}(i, s)
+		}(i, s, p)
 	}
 
 	if err := r.Run(m); err != nil {
