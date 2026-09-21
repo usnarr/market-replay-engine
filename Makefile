@@ -17,9 +17,20 @@ test:
 # zero-allocation gate regardless of the code under test.
 # Writes machine-readable output to bench/results/ for the
 # regression comparison described in plans/13-bench-and-profiles.md.
+#
+# The exit code is checked explicitly, not piped through tee: make
+# runs recipes under /bin/sh, and a POSIX pipeline's exit status is its
+# last command's -- `go test ... | tee file` exits 0 even when go test
+# itself failed, silently turning off the allocation gate from make
+# bench's own point of view. BENCHCOUNT lets CI request several samples
+# (for plans/13-bench-and-profiles.md's regression comparison) without
+# reaching for a second target; the local default stays 1.
+BENCHCOUNT ?= 1
+
 bench:
 	mkdir -p bench/results
-	go test -run=^$$ -bench=. -benchmem ./... | tee bench/results/latest.txt
+	go test -run=^$$ -bench=. -benchmem -count=$(BENCHCOUNT) ./... > bench/results/latest.txt || { cat bench/results/latest.txt; exit 1; }
+	cat bench/results/latest.txt
 
 # Replays the same dataset at 1, 4, 16, and 64 workers and asserts
 # an identical output hash, at the merged stream and at every Block
@@ -28,11 +39,27 @@ bench:
 determinism:
 	go test -run TestDeterminism -v ./internal/merge/... ./internal/fanout/...
 
-# CPU and memory profile, writes profiles/. Generate a committed SVG
-# per version with: go tool pprof -svg <profile> > profiles/<name>.svg
+# CPU and memory profile, one pair of .prof files per package in
+# PROFILE_PKGS: go test -bench refuses -cpuprofile/-memprofile against
+# more than one package in a single invocation, so profiling the whole
+# hot path needs one go test call per package, not one call over ./....
+# Generate a committed SVG per version with, for example:
+#   go tool pprof -svg profiles/merge-cpu.prof > profiles/merge-cpu-<sha>.svg
+# go tool pprof -svg shells out to Graphviz's `dot`; that is a
+# prerequisite of this follow-up step alone, not of this target.
+#
+# go test also leaves the compiled test binary (<pkg>.test, .exe on
+# Windows) in the repo root when a profiling flag is set -- pprof's own
+# symbolization needs it. Gitignored (*.test.exe); safe to delete
+# afterward.
+PROFILE_PKGS ?= internal/store internal/merge internal/fanout
+
 profile:
 	mkdir -p profiles
-	go test -run=^$$ -bench=. -cpuprofile=profiles/cpu.prof -memprofile=profiles/mem.prof ./...
+	for pkg in $(PROFILE_PKGS); do \
+		name=$$(basename $$pkg); \
+		go test -run=^$$ -bench=. -cpuprofile=profiles/$$name-cpu.prof -memprofile=profiles/$$name-mem.prof ./$$pkg/... || exit 1; \
+	done
 
 # go vet, staticcheck, and the project's own determinism analyzer,
 # run over ./... from the repo root. cmd/lint-determinism is a

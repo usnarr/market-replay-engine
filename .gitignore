@@ -5,6 +5,7 @@ testdata/large/
 *.prof
 *.pprof
 *.test
+*.test.exe
 
 # go build ./... with no -o writes a binary named after the package
 # directory into cwd. One entry per cmd/ binary, plus its Windows form.
