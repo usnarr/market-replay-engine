@@ -65,7 +65,7 @@ func suffixFrom(full []Event, t int64) []Event {
 	return nil
 }
 
-// TestSeekSuffix is the strongest test in the suite: replay(from=T) at
+// TestDeterminismSeekSuffix is the strongest test in the suite: replay(from=T) at
 // the merge stage must be an exact record-for-record suffix of
 // replay(from=0), for every venue seeked independently by its own
 // SeekTime. This is what Q1's "exchange_ts non-decreasing per venue"
@@ -73,7 +73,7 @@ func suffixFrom(full []Event, t int64) []Event {
 // contiguous tail of that venue's sequence, so seeking every venue and
 // re-merging gives exactly the tail of the full merged stream, nothing
 // more and nothing less.
-func TestSeekSuffix(t *testing.T) {
+func TestDeterminismSeekSuffix(t *testing.T) {
 	ds := buildSynthDataset(t)
 	full := replayAllEvents(t, ds.openCursors(t, ds.Venues))
 
@@ -129,13 +129,13 @@ func TestSeekSuffix(t *testing.T) {
 	}
 }
 
-// TestSeekSuffixWithTheWorkerPool repeats TestSeekSuffix's boundary
+// TestDeterminismSeekSuffixWithTheWorkerPool repeats TestDeterminismSeekSuffix's boundary
 // cases through NewConcurrentMerger, at a few worker counts. Seeking
 // happens on the Cursor before either constructor runs, but the
 // concurrent path reads its starting position from a venueFeed built at
 // construction time, not from the cursor directly — a wiring bug there
 // would only show up once a worker pool is involved.
-func TestSeekSuffixWithTheWorkerPool(t *testing.T) {
+func TestDeterminismSeekSuffixWithTheWorkerPool(t *testing.T) {
 	ds := buildSynthDataset(t)
 	full := replayAllEvents(t, ds.openCursors(t, ds.Venues))
 
@@ -188,10 +188,10 @@ func TestSeekSuffixWithTheWorkerPool(t *testing.T) {
 	}
 }
 
-// TestSeekSuffixAcrossVenueOrder confirms the suffix property does not
+// TestDeterminismSeekSuffixAcrossVenueOrder confirms the suffix property does not
 // depend on which leaf of the loser tree a venue lands on, matching the
 // same check TestDeterminism already does for a plain replay.
-func TestSeekSuffixAcrossVenueOrder(t *testing.T) {
+func TestDeterminismSeekSuffixAcrossVenueOrder(t *testing.T) {
 	ds := buildSynthDataset(t)
 	full := replayAllEvents(t, ds.openCursors(t, ds.Venues))
 	target := full[len(full)/2].Record.ExchangeTs
