@@ -88,8 +88,20 @@ type Ring struct {
 	blobs     []atomic.Uint64
 
 	writeSeq atomic.Uint64
-	end      atomic.Uint64
-	hasEnd   atomic.Bool
+
+	// endPlusOne is the ring's end, packed into one atomic word: 0 means
+	// SetEnd has not been called, and any other value V means the end is
+	// V-1. Reading "the end index" and "whether there is one" as two
+	// separate atomics (as this used to) lets a reader observe the new
+	// hasEnd=true alongside the old, zero-value end — sequential
+	// consistency across atomics orders each field's own loads and
+	// stores against each other, but does not stop two different
+	// fields' reads from straddling the writer's two stores, one from
+	// before either store and one from after both. That reader would
+	// then see s.pos >= 0, always true, and end its stream at whatever
+	// point it happened to be, silently short. One word closes the
+	// window the same way slot.seq's 2n/2n+1 encoding does above.
+	endPlusOne atomic.Uint64
 
 	// blocking is every registered Block subscriber, in registration
 	// order, used by the min-cursor barrier.
@@ -153,14 +165,17 @@ func (r *Ring) WriteIndex() uint64 { return r.writeSeq.Load() }
 // request still pending with ErrClosed: nothing more will ever be
 // applied once there is nothing left to emit.
 func (r *Ring) SetEnd(end uint64) {
-	r.end.Store(end)
-	r.hasEnd.Store(true)
+	r.endPlusOne.Store(end + 1)
 	r.closeControl()
 }
 
 // End reports the ring's end index and whether SetEnd has been called.
 func (r *Ring) End() (uint64, bool) {
-	return r.end.Load(), r.hasEnd.Load()
+	v := r.endPlusOne.Load()
+	if v == 0 {
+		return 0, false
+	}
+	return v - 1, true
 }
 
 // Write publishes rec, and blob when rec is a snapshot pointer, at the
