@@ -14,4 +14,5 @@ var (
 	ErrModeUnset    = errors.New("fanout: backpressure mode must be Block or Drop")
 	ErrStartUnset   = errors.New("fanout: start position must be set")
 	ErrStartLapped  = errors.New("fanout: a Block subscriber cannot start before the oldest record still in the ring")
+	ErrClosed       = errors.New("fanout: ring is closed")
 )

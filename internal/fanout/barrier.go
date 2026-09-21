@@ -49,6 +49,7 @@ func (r *Ring) waitForBlockBarrier(n uint64) {
 	}
 	threshold := n - capacity
 	for r.minBlockCursor() <= threshold {
+		r.applyControl()
 		runtime.Gosched()
 	}
 }

@@ -70,10 +70,11 @@ type Ring struct {
 	hasEnd   atomic.Bool
 
 	// blocking is every registered Block subscriber, in registration
-	// order, used by the min-cursor barrier. Subscribe appends to it
-	// directly; see subscriber.go's doc comment on Subscribe for why
-	// that is safe before a later commit's lifecycle exists.
+	// order, used by the min-cursor barrier.
 	blocking []*Subscriber
+
+	// ctrl is the join/leave control queue. See lifecycle.go.
+	ctrl controlQueue
 }
 
 // NewRing returns a Ring with the given configuration. The arena is
@@ -107,10 +108,13 @@ func (r *Ring) WriteIndex() uint64 { return r.writeSeq.Load() }
 // ever happen. It is set once, by the single writer goroutine once the
 // merge it is draining reports a clean end of stream, and read by every
 // subscriber's Next to tell "wait for more" apart from "the stream is
-// over."
+// over." It also closes the control queue, failing any join or leave
+// request still pending with ErrClosed: nothing more will ever be
+// applied once there is nothing left to emit.
 func (r *Ring) SetEnd(end uint64) {
 	r.end.Store(end)
 	r.hasEnd.Store(true)
+	r.closeControl()
 }
 
 // End reports the ring's end index and whether SetEnd has been called.

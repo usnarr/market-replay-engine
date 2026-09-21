@@ -102,12 +102,14 @@ func (s *Subscriber) Mode() BackpressureMode { return s.mode }
 func (s *Subscriber) Cursor() uint64 { return s.cursor.Load() }
 
 // Subscribe registers a new subscriber against r, starting at the
-// position start names, with the given backpressure mode. It resolves
-// the starting position immediately: Subscribe is meant to be called
-// before r is being written from another goroutine (the common case —
-// see docs/backpressure.md, Q4 — of a subscriber set fixed before the
-// first event); a later commit's subscriber lifecycle adds the control
-// queue a mid-run join needs instead.
+// position start names, with the given backpressure mode. Before
+// StartEmitting has been called, it resolves the starting position and
+// returns immediately — the common case (see docs/backpressure.md, Q4)
+// of a subscriber set fixed before the first event. Once r is being
+// actively emitted, the request is queued and resolved by the emit
+// goroutine between records instead, so a joining goroutine never
+// mutates the subscriber set while the emit goroutine might be
+// iterating it.
 //
 // A Block subscriber whose resolved start position has already been
 // overwritten is rejected with ErrStartLapped: Block promises no loss,
@@ -119,7 +121,31 @@ func (r *Ring) Subscribe(mode BackpressureMode, start StartAt) (*Subscriber, err
 	if mode != ModeBlock && mode != ModeDrop {
 		return nil, ErrModeUnset
 	}
+	if start.kind == startUnset {
+		return nil, ErrStartUnset
+	}
 
+	r.ctrl.mu.Lock()
+	switch {
+	case r.ctrl.closed:
+		r.ctrl.mu.Unlock()
+		return nil, ErrClosed
+	case r.ctrl.started:
+		reply := make(chan controlReply, 1)
+		r.ctrl.pending = append(r.ctrl.pending, control{kind: controlSubscribe, mode: mode, start: start, reply: reply})
+		r.ctrl.mu.Unlock()
+		res := <-reply
+		return res.sub, res.err
+	default:
+		r.ctrl.mu.Unlock()
+		return r.subscribeNow(mode, start)
+	}
+}
+
+// subscribeNow resolves start immediately against r's current state and
+// registers the resulting Subscriber. Called directly by Subscribe
+// before StartEmitting, and by applyControl once it has been called.
+func (r *Ring) subscribeNow(mode BackpressureMode, start StartAt) (*Subscriber, error) {
 	var cursor uint64
 	switch start.kind {
 	case startBeginning:
