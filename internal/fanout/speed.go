@@ -25,16 +25,70 @@ type Speed struct {
 	den int64
 }
 
-// NewSpeed returns num/den as a Speed, or ErrInvalidSpeed if either is
-// not positive. A later commit extends this with GCD reduction (so
-// manifest-equivalent speeds compare equal) and bounds on the ratio's
-// extremes; this is the minimum a Speed needs to be safe for
-// DeliveryTime to use.
+const (
+	// maxSpeedTerm bounds each of Speed's reduced terms. It keeps
+	// dt*den — the 128-bit product DeliveryTime computes — comfortably
+	// representable for any real dataset span, well before the ratio
+	// bounds below are even considered.
+	maxSpeedTerm = 1 << 31
+
+	// maxSpeedUp and maxSlowdown bound num/den's ratio in each
+	// direction. The project's stated range is 1x-10,000x; these leave
+	// two orders of magnitude of headroom on the fast side and cover a
+	// slow-motion range no real use case needs beyond. Both exist to
+	// keep DeliveryTime's quotient inside int64 for any realistic
+	// dataset span, not to police what an operator "should" ask for —
+	// a speed outside this range would still only saturate
+	// DeliveryTime's output rather than misbehave, but is rejected
+	// here so a caller finds out at construction time, not partway
+	// through a replay.
+	maxSpeedUp  = 1_000_000
+	maxSlowdown = 1_024
+)
+
+// NewSpeed returns num/den, reduced to lowest terms, as a Speed. It
+// rejects a non-positive num or den, a reduced term above
+// maxSpeedTerm, or a ratio outside [1/maxSlowdown, maxSpeedUp], all as
+// ErrInvalidSpeed — there is no valid interpretation of a zero,
+// negative, or unbounded speed for this arithmetic to degrade
+// gracefully into, so rejecting early keeps invalid input from ever
+// reaching DeliveryTime.
+//
+// Reducing by GCD first is what makes NewSpeed(2, 1) == NewSpeed(10000,
+// 5000): cmd/replayd's run manifest records Num()/Den(), and two
+// requests for "the same speed" written two different ways must
+// produce a byte-identical manifest.
 func NewSpeed(num, den int64) (Speed, error) {
 	if num <= 0 || den <= 0 {
 		return Speed{}, ErrInvalidSpeed
 	}
+
+	if g := gcdInt64(num, den); g > 1 {
+		num, den = num/g, den/g
+	}
+	if num > maxSpeedTerm || den > maxSpeedTerm {
+		return Speed{}, ErrInvalidSpeed
+	}
+	// Both products are bounded well inside int64 given the term check
+	// above: maxSpeedUp*den <= 10^6 * 2^31 < 2^51, maxSlowdown*num <=
+	// 2^10 * 2^31 = 2^41.
+	if num > maxSpeedUp*den {
+		return Speed{}, ErrInvalidSpeed
+	}
+	if den > maxSlowdown*num {
+		return Speed{}, ErrInvalidSpeed
+	}
+
 	return Speed{num: num, den: den}, nil
+}
+
+// gcdInt64 returns the greatest common divisor of two positive int64
+// values.
+func gcdInt64(a, b int64) int64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 // Num and Den return s's terms, exactly as constructed. cmd/replayd

@@ -34,7 +34,7 @@ func TestSpeedDeliveryTime(t *testing.T) {
 		cases := []struct {
 			num, den int64
 		}{
-			{1, 1}, {10000, 1}, {1, 10000}, {3, 7}, {7, 3},
+			{1, 1}, {10000, 1}, {1, 1000}, {3, 7}, {7, 3},
 		}
 		rng := rand.New(rand.NewPCG(1, 2))
 
@@ -85,9 +85,15 @@ func TestSpeedDeliveryTime(t *testing.T) {
 	})
 
 	t.Run("a_schedule_beyond_int64_saturates_instead_of_wrapping", func(t *testing.T) {
-		// speed 1/2^40: den huge relative to num, so a moderate span
-		// already produces a quotient overflowing 64 bits.
-		s, _ := NewSpeed(1, 1<<40)
+		// speed 1/maxSlowdown: the slowest ratio NewSpeed still accepts.
+		// Even within the supported range, the largest possible span
+		// (math.MaxInt64 nanoseconds, ~292 years) overflows the
+		// quotient at this ratio, which is exactly why DeliveryTime
+		// saturates instead of trusting bits.Div64 not to panic.
+		s, err := NewSpeed(1, maxSlowdown)
+		if err != nil {
+			t.Fatalf("NewSpeed(1, %d) error = %v, want nil", maxSlowdown, err)
+		}
 		got := s.DeliveryTime(0, 0, math.MaxInt64)
 		if got != math.MaxInt64 {
 			t.Errorf("DeliveryTime() = %d, want MaxInt64", got)
@@ -153,4 +159,58 @@ func BenchmarkSpeedDeliveryTime(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		call()
 	}
+}
+
+func TestNewSpeed(t *testing.T) {
+	tests := []struct {
+		name     string
+		num, den int64
+		wantErr  bool
+	}{
+		{"rejects_a_zero_numerator", 0, 1, true},
+		{"rejects_a_zero_denominator", 1, 0, true},
+		{"rejects_a_negative_numerator", -1, 1, true},
+		{"rejects_a_negative_denominator", 1, -1, true},
+		{"rejects_min_int64", math.MinInt64, 1, true},
+		{"rejects_a_term_above_the_bound_after_reduction", 1 << 32, 1, true},
+		{"rejects_a_speed_up_beyond_the_supported_range", maxSpeedUp + 1, 1, true},
+		{"rejects_a_slowdown_beyond_the_supported_range", 1, maxSlowdown + 1, true},
+		{"accepts_one_times", 1, 1, false},
+		{"accepts_ten_thousand_times", 10000, 1, false},
+		{"accepts_a_fractional_speed", 1, 2, false},
+		{"accepts_the_maximum_supported_speed_up", maxSpeedUp, 1, false},
+		{"accepts_the_maximum_supported_slowdown", 1, maxSlowdown, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewSpeed(tt.num, tt.den)
+			if tt.wantErr {
+				if err != ErrInvalidSpeed {
+					t.Fatalf("NewSpeed(%d, %d) error = %v, want ErrInvalidSpeed", tt.num, tt.den, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewSpeed(%d, %d) error = %v, want nil", tt.num, tt.den, err)
+			}
+		})
+	}
+
+	t.Run("reduces_equal_speeds_to_the_same_value", func(t *testing.T) {
+		a, err := NewSpeed(2, 1)
+		if err != nil {
+			t.Fatalf("NewSpeed(2, 1) error = %v, want nil", err)
+		}
+		b, err := NewSpeed(10000, 5000)
+		if err != nil {
+			t.Fatalf("NewSpeed(10000, 5000) error = %v, want nil", err)
+		}
+		if a != b {
+			t.Errorf("NewSpeed(2, 1) = %+v, NewSpeed(10000, 5000) = %+v, want equal", a, b)
+		}
+		if a.Num() != 2 || a.Den() != 1 {
+			t.Errorf("reduced terms = (%d, %d), want (2, 1)", a.Num(), a.Den())
+		}
+	})
 }
