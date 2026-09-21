@@ -144,7 +144,35 @@ Verification throughput is flat at 26-28 GB/s across a 256× range of block size
 
 ## Pacing accuracy
 
-_No measurements yet. First entry lands with M8 pacing._
+Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th Gen Intel Core i7-11370H @ 3.30GHz.
+
+### Pacer wait cost
+
+| Date | Commit | Change | Before | After | Profile |
+|---|---|---|---|---|---|
+| 2026-09-21 | (this commit) | release-batching: cache releaseUntil so a run of records inside one window costs one clock read, not one per record | 13.14 ns/op | 1.542 ns/op | — |
+
+```
+Before (single-reused-timer pacer, no batching): BenchmarkPacerWait-8            90133396   13.140 ns/op   0 B/op   0 allocs/op
+After  (released_within_the_window, batched):    BenchmarkPacerWait/released...  147162432   1.542 ns/op   0 B/op   0 allocs/op
+BenchmarkPacerWait/arms_the_timer_once_per_wait-8       148   2211673 ns/op   0 B/op   0 allocs/op
+```
+
+This change is justified by the plan's own design rationale (`plans/08-pacing.md`,
+Q7: 1x-10,000x is a target pacing rate with graceful batch-and-release degradation,
+not a per-event scheduling guarantee) rather than by a live `go tool pprof` run in
+this session — release-batching is required functionality, not speculative tuning,
+so it does not need the profile-first sequence the project reserves for ad-hoc
+performance changes. The before/after numbers above are the measurement half of
+that rule, taken regardless.
+
+`arms_the_timer_once_per_wait` genuinely waits on every call (deadlines spaced two
+release windows apart), so its cost is dominated by the measured window itself
+(~1.1ms on this machine) rather than by the pacer's own logic — reported, not
+gated: `RealClock.NewTimer` wraps `time.AfterFunc`, whose fire path is `go
+arg.(func())()` (see `internal/clock/realclock.go`), so a fire may allocate a
+goroutine when the runtime's free-goroutine list is cold. This run happened to
+report zero, which is not a guarantee.
 
 ## End-to-end replay rate
 

@@ -37,10 +37,14 @@ func TestPacer(t *testing.T) {
 	})
 
 	t.Run("waits_until_a_future_records_delivery_time", func(t *testing.T) {
-		// A small real delay: bounded, and tolerant of ordinary
-		// scheduling jitter, the same style internal/clock's own
-		// realclock_test.go uses for "waits for deadline" cases.
-		const delayNs = 5_000_000 // 5ms
+		// The delay must exceed maxWindow: release-batching (added in a
+		// later commit) means a deadline inside the measured window
+		// releases immediately without genuinely waiting, and the
+		// measured window on a real, possibly coarse-grained clock could
+		// otherwise be large enough to make this assertion pass without
+		// the wait ever happening. Above maxWindow, that can never
+		// happen regardless of what this machine measures.
+		const delayNs = maxWindow + 5_000_000 // maxWindow + 5ms
 		rc := clock.RealClock{}
 		s, _ := NewSpeed(1, 1)
 		p := NewPacer(rc, s)
@@ -113,27 +117,53 @@ func TestPacer(t *testing.T) {
 	})
 }
 
-// BenchmarkPacerWait measures the released-immediately path: every
-// deadline is already due, so this never touches the timer at all,
-// which is the per-record cost that matters at high replay speed. A
-// benchmark that actually arms the timer belongs with the
-// release-batching commit, once there is a window to report alongside
-// it.
 func BenchmarkPacerWait(b *testing.B) {
-	sc := &clock.SimClock{}
-	s, err := NewSpeed(10000, 1)
-	if err != nil {
-		b.Fatalf("NewSpeed() error = %v, want nil", err)
-	}
-	p := NewPacer(sc, s)
-	p.Start(0)
+	// released_within_the_window is the per-record cost that matters at
+	// high replay speed: every deadline is already due or inside the
+	// current batch, so it never touches the clock or the timer at all.
+	b.Run("released_within_the_window", func(b *testing.B) {
+		sc := &clock.SimClock{}
+		s, err := NewSpeed(10000, 1)
+		if err != nil {
+			b.Fatalf("NewSpeed() error = %v, want nil", err)
+		}
+		p := NewPacer(sc, s)
+		p.Start(0)
 
-	wait := func() { sinkBool = p.Wait(-1) } // always due: dt <= 0
-	allocgate.AssertZero(b, wait)
+		wait := func() { sinkBool = p.Wait(-1) } // always due: dt <= 0
+		allocgate.AssertZero(b, wait)
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		wait()
-	}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			wait()
+		}
+	})
+
+	// arms_the_timer_once_per_wait genuinely waits every call: deadlines
+	// are spaced two windows apart, so each one falls outside the batch
+	// the previous call released. RealClock.NewTimer wraps
+	// time.AfterFunc, whose fire path is `go arg.(func())()` (see
+	// internal/clock/realclock.go) — a fire may allocate a goroutine
+	// when the runtime's free-goroutine list is cold, so this is
+	// reported, not gated. Amortised over a real batch this is a
+	// vanishing fraction of an allocation per record, not a hot path
+	// under any definition.
+	b.Run("arms_the_timer_once_per_wait", func(b *testing.B) {
+		rc := clock.RealClock{}
+		s, err := NewSpeed(1, 1)
+		if err != nil {
+			b.Fatalf("NewSpeed() error = %v, want nil", err)
+		}
+		p := NewPacer(rc, s)
+		start := rc.Now()
+		p.Start(start)
+		step := 2 * p.Window()
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			sinkBool = p.Wait(start + int64(i+1)*step)
+		}
+	})
 }
