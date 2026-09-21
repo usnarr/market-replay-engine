@@ -12,7 +12,8 @@ import (
 const ruleNoMapRangeOrdered = "no-map-range-ordered"
 
 // NoMapRangeOrdered flags any `range` over a map-typed expression in
-// internal/merge, internal/fanout, or internal/store. This is deliberately
+// internal/merge, internal/fanout, internal/store, or internal/book. This
+// is deliberately
 // conservative: it does not try to prove whether a particular loop's
 // output can reach the emitted stream, because that reachability question
 // is exactly the kind of thing a future change could get wrong invisibly.

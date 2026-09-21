@@ -9,11 +9,13 @@ func hotPath(pkgPath string) bool {
 	return inPathSegment(pkgPath, "internal/merge") || inPathSegment(pkgPath, "internal/fanout")
 }
 
-// orderedPath reports whether pkgPath is one of the three packages where an
+// orderedPath reports whether pkgPath is one of the packages where an
 // unordered map iteration could reach output: internal/merge,
-// internal/fanout, or internal/store.
+// internal/fanout, internal/store, or internal/book. internal/book is off
+// the hot path (see internal/book/book.go), so it gets this rule but not
+// hotPath's any/fmt.Sprint rules.
 func orderedPath(pkgPath string) bool {
-	return hotPath(pkgPath) || inPathSegment(pkgPath, "internal/store")
+	return hotPath(pkgPath) || inPathSegment(pkgPath, "internal/store") || inPathSegment(pkgPath, "internal/book")
 }
 
 // inPathSegment reports whether seg appears as a whole "/"-separated
