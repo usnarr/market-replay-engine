@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"testing"
 
+	"replay/internal/allocgate"
 	"replay/internal/store"
 	"replay/internal/synth"
 )
@@ -29,16 +30,20 @@ func BenchmarkLoserTreePop(b *testing.B) {
 			}
 			tree.Init()
 			next := int64(k)
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			pop := func() {
 				w, _ := tree.Winner()
 				if err := tree.Advance(mk(next, 1, 0, 0)); err != nil {
 					b.Fatalf("Advance() error = %v, want nil", err)
 				}
 				next++
 				sinkInt = w
+			}
+			allocgate.AssertZero(b, pop)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				pop()
 			}
 		})
 	}

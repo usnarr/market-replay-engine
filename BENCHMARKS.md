@@ -40,9 +40,10 @@ note (half a binary min-heap's comparisons per pop). `BenchmarkMergerNext` repla
 timer whenever it exhausts, so this is steady-state per-record throughput, not one
 dataset pass amortized over a much larger `b.N`; the small rise from 1 to 16 workers
 is reader-goroutine coordination overhead on a dataset small enough that decode
-itself is not the bottleneck at any worker count tested. All three benchmarks report
-zero allocations, ungated for now — `internal/allocgate.AssertZero` is applied to
-`BenchmarkLoserTreePop` specifically in a later commit.
+itself is not the bottleneck at any worker count tested. `BenchmarkLoserTreePop` is
+now gated with `internal/allocgate.AssertZero`; the other two report zero
+allocations but are not gated, since neither is one of the specific targets
+`plans/13-bench-and-profiles.md` names.
 
 ## Fan-out throughput
 
@@ -73,6 +74,13 @@ subscriber set holds no Drop subscriber (the Block barrier then already guarante
 exclusivity). Revisit only if a profile shows ring writes are the pipeline's
 bottleneck.
 
+`internal/allocgate.AssertZero` now gates `BenchmarkRingWrite/no_blob` and
+`BenchmarkRingRead` — the two targets `plans/13-bench-and-profiles.md` names for
+this package, "ring write and ring read including the lapping protocol" (`read` is
+the same load-copy-reload path a lapped read takes). Verified the gate actually
+catches a regression: a deliberately introduced allocation in the write path failed
+the benchmark with the expected message, reverted before committing.
+
 ## Encode/decode throughput
 
 Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th Gen Intel Core i7-11370H @ 3.30GHz. Numbers from a different machine are not comparable to these.
@@ -98,7 +106,7 @@ BenchmarkCanonicalV1/delta_sha256-8  44.590 ns/op  897 MB/s  0 B/op  0 allocs/op
 
 SHA-256 runs at 897 MB/s against CRC-32C's 2335 MB/s on the same 40-byte projection — a 2.6× cost per record. That is why CRC-32C is the default canonical hash and SHA-256 is opt-in, for attestation only.
 
-The M7 allocation gate is not wired in yet, but every hot-path benchmark already reports zero allocations.
+`internal/allocgate.AssertZero` now gates `BenchmarkEncodeRecord`, `BenchmarkDecodeRecordFields`, and `BenchmarkCanonicalV1/delta`, the three targets `plans/13-bench-and-profiles.md` names for this package. Every hot-path benchmark in this section reports zero allocations, gated or not.
 
 ### Block size
 

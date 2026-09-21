@@ -5,6 +5,8 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"testing"
+
+	"replay/internal/allocgate"
 )
 
 // Sinks stop the compiler from proving a benchmarked result is unused,
@@ -31,6 +33,8 @@ var benchRecord = Record{
 
 func BenchmarkEncodeRecord(b *testing.B) {
 	var buf [RecordSize]byte
+	allocgate.AssertZero(b, func() { EncodeRecord(buf[:], benchRecord) })
+
 	b.SetBytes(RecordSize)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -45,6 +49,8 @@ func BenchmarkEncodeRecord(b *testing.B) {
 func BenchmarkDecodeRecordFields(b *testing.B) {
 	var buf [RecordSize]byte
 	EncodeRecord(buf[:], benchRecord)
+	allocgate.AssertZero(b, func() { sinkRecord = DecodeRecordFields(buf[:]) })
+
 	b.SetBytes(RecordSize)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -241,6 +247,8 @@ func BenchmarkCanonicalV1(b *testing.B) {
 
 	b.Run("delta", func(b *testing.B) {
 		h := NewCanonicalHasher(CanonicalCRC32C)
+		allocgate.AssertZero(b, func() { h.Write(benchRecord, nil) })
+
 		b.SetBytes(40)
 		b.ReportAllocs()
 		b.ResetTimer()

@@ -3,6 +3,7 @@ package fanout
 import (
 	"testing"
 
+	"replay/internal/allocgate"
 	"replay/internal/store"
 )
 
@@ -31,15 +32,19 @@ func BenchmarkRingWrite(b *testing.B) {
 		if err != nil {
 			b.Fatalf("NewRing() error = %v, want nil", err)
 		}
-		b.ReportAllocs()
-		b.ResetTimer()
-
-		for i := 0; i < b.N; i++ {
+		write := func() {
 			n, err := r.Write(benchDelta, nil)
 			if err != nil {
 				b.Fatalf("Write() error = %v, want nil", err)
 			}
 			sinkUint64 = n
+		}
+		allocgate.AssertZero(b, write)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			write()
 		}
 	})
 
@@ -74,11 +79,15 @@ func BenchmarkRingRead(b *testing.B) {
 	if _, err := r.Write(benchDelta, nil); err != nil {
 		b.Fatalf("Write() error = %v, want nil", err)
 	}
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	read := func() {
 		_, _, ok := r.read(0, &sinkRecord, nil)
 		sinkBool = ok
+	}
+	allocgate.AssertZero(b, read)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		read()
 	}
 }
