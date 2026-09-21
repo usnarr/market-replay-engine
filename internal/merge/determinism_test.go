@@ -98,6 +98,25 @@ func replaySynthConcurrent(t *testing.T, ds *synthDataset, order []uint16, worke
 	return drainReplay(t, ds, m)
 }
 
+// replaySynthShaped is replaySynthConcurrent with an explicit batch
+// shape. It checks that every venue feed really carries that shape, so a
+// knob that stopped being applied would fail here rather than let the
+// batch-shape subtests replay the default shape and still pass.
+func replaySynthShaped(t *testing.T, ds *synthDataset, order []uint16, workers int, shape batchShape) replayResult {
+	t.Helper()
+
+	m, err := newMergerShape(ds.openCursors(t, order), workers, shape)
+	if err != nil {
+		t.Fatalf("newMergerShape(%d, %+v) error = %v, want nil", workers, shape, err)
+	}
+	for _, vf := range m.venues {
+		if vf.shape != shape {
+			t.Fatalf("venue %d feed shape = %+v, want %+v", vf.venueID, vf.shape, shape)
+		}
+	}
+	return drainReplay(t, ds, m)
+}
+
 func drainReplay(t *testing.T, ds *synthDataset, m *Merger) replayResult {
 	t.Helper()
 
@@ -236,6 +255,22 @@ func TestDeterminism(t *testing.T) {
 		}
 	})
 
+	t.Run("the_hash_does_not_depend_on_the_batch_shape", func(t *testing.T) {
+		// Batch size and feed-channel depth change only how decode work is
+		// cut up and how far a reader may run ahead of the merge. One
+		// record per batch puts a batch boundary between every pair of
+		// records; one batch per dataset puts none inside a file at all.
+		for _, bs := range batchShapes(ds.RecordCount()) {
+			for _, workers := range workerCounts {
+				t.Run(bs.name+"_workers_"+strconv.Itoa(workers), func(t *testing.T) {
+					got := replaySynthShaped(t, ds, ds.Venues, workers, bs.shape)
+
+					assertSameReplay(t, want, got)
+				})
+			}
+		}
+	})
+
 	t.Run("the_worker_pool_agrees_with_inline_decoding_on_every_venue_order", func(t *testing.T) {
 		for i := 1; i < len(ds.Venues); i++ {
 			t.Run("rotated_by_"+strconv.Itoa(i), func(t *testing.T) {
@@ -251,6 +286,30 @@ func TestDeterminism(t *testing.T) {
 
 // workerCounts are the worker counts make determinism replays at.
 var workerCounts = []int{1, 4, 16, 64}
+
+// shapeCase is one batch geometry the determinism suite replays at.
+type shapeCase struct {
+	name  string
+	shape batchShape
+}
+
+// batchShapes are the batch geometries make determinism replays a
+// dataset of n records at. Both extremes are covered on purpose: a batch
+// of one record is where an off-by-one at a batch boundary shows up,
+// and a batch larger than the dataset is where no boundary exists to
+// hide one. A depth of two is the shallowest feed a venue can make
+// progress with, so it is the most backpressure a reader goroutine can
+// be put under.
+func batchShapes(n int) []shapeCase {
+	return []shapeCase{
+		{name: "one_record_per_batch", shape: batchShape{records: 1, batches: feedBatches}},
+		{name: "one_record_per_batch_with_the_shallowest_feed", shape: batchShape{records: 1, batches: 2}},
+		{name: "a_batch_that_divides_no_block", shape: batchShape{records: 97, batches: 2}},
+		{name: "the_default_size_with_the_shallowest_feed", shape: batchShape{records: batchRecords, batches: 2}},
+		{name: "one_batch_for_the_whole_dataset", shape: batchShape{records: n + 1, batches: feedBatches}},
+		{name: "one_batch_for_the_whole_dataset_with_the_shallowest_feed", shape: batchShape{records: n + 1, batches: 2}},
+	}
+}
 
 func assertSameReplay(t *testing.T, want, got replayResult) {
 	t.Helper()
