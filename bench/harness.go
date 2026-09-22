@@ -14,6 +14,8 @@
 // subscribers register, and both are output-affecting for the stream it
 // measures. Every order it picks comes from file content, never from a
 // directory listing, a file name, or goroutine start order.
+//
+// See docs/bench.md.
 package bench
 
 import (

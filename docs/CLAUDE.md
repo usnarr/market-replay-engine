@@ -13,5 +13,6 @@ Docs explain the **why**. The code shows the **what**. See the root [`CLAUDE.md`
 | [`replayd.md`](./replayd.md) | The server and its gRPC API: the `Subscribe` contract, start positions and rational speed on the wire, the status-code mapping, the pinned flow-control windows, the metrics, and `cmd/replayd`'s flag surface. |
 | [`convert.md`](./convert.md) | The archive-tier converter: the canonical source Parquet schema, the venue partitioning policy, snapshot epoch placement, byte-reproducible artifacts, the artifact content hash, and what `cmd/convert` rejects rather than repairs. |
 | [`no-database.md`](./no-database.md) | Why the project never adds a database, and the run-manifest handoff between `replayd` and `cmd/catalogue` that keeps that true. |
+| [`bench.md`](./bench.md) | How performance is measured and defended: the allocation gate's design, the profile-first rule, `BENCHMARKS.md`'s append-only protocol, and the end-to-end load harness. |
 
 Each file's content is written once, by the milestone that first needs it, and updated in place afterward — never duplicated into a second file on the same topic.
