@@ -10,6 +10,12 @@ A design with one buffered channel and one goroutine per subscriber does not imp
 
 `internal/fanout.Ring` replaces this entirely with a single shared, fixed-capacity ring and one atomic cursor per subscriber (a disruptor-style design). One emit goroutine writes; any number of subscriber goroutines read through their own cursor. This is what makes Block mean exactly what it says: a real per-event barrier, not a per-buffer one.
 
+### The three emit entry points
+
+The emit goroutine drives the ring through one of three methods, which differ only in what each adds per record. `Ring.Run(m)` drains a `merge.Merger` into the ring. `Ring.RunPaced(m, p)` adds the pacing gate (see [`clock.md`](./clock.md)). `Ring.RunDigest(m, p, h)` adds an optional running canonical hash. The first two are one-line wrappers over the third: a `nil` pacer or a `nil` hasher costs one branch per record, so a run that wants neither pays nothing measurable for the option (`BENCHMARKS.md`).
+
+`RunDigest` exists because a run-level digest has to be computed by the writer, not by a subscriber. A Block subscriber reading every record would arrive at the same hash, but it would throttle the entire run to the speed of a hash nobody asked for — that is the Block/Drop coupling below, turned on the run itself — and it would hash what the ring re-delivered rather than what the merge produced. `cmd/replayd` uses `RunDigest` to fill the run manifest's `canonical_hash` for free, on the goroutine that was already writing every record.
+
 ## The lapping protocol
 
 A reader may be copying a slot at the exact moment the writer overwrites it. The protocol that makes this safe:
@@ -55,7 +61,7 @@ A slow Block subscriber throttles the entire ring: the writer will not advance p
 
 A gap is delivered attached to the record that follows it, in the same `Delivery{Record, Blob, Gap, HasGap}` — not as a separate frame a subscriber could miss. This costs nothing extra: the catch-up target the lapping protocol already computes (`internal/fanout.Ring.next`) is exactly the record the gap precedes, so the two are known together, not in two passes.
 
-**The gap never reaches the canonical hash.** It lives in delivery framing only. A seek-replay that starts partway through the stream must produce the same content hash as the equivalent suffix of a full replay; if gap reporting were part of the hashed projection, a seek would change the hash for reasons unrelated to content, breaking the seek-suffix property `internal/merge` already establishes at the merge stage.
+**The gap never reaches the canonical hash.** It lives in delivery framing only. A seek-replay that starts partway through the stream must produce the same content hash as the equivalent suffix of a full replay; if gap reporting were part of the hashed projection, a seek would change the hash for reasons unrelated to content, breaking the seek-suffix property `internal/merge` already establishes at the merge stage. `RunDigest`'s run-level digest is structurally unable to see one: it hashes each record where the writer sits, before any subscriber's cursor, gap or barrier wait exists.
 
 ## `pacing_slip`
 
@@ -63,11 +69,17 @@ A gap is delivered attached to the record that follows it, in the same `Delivery
 
 This is the mechanism that keeps the Block/Drop coupling above from being invisible: without it, a single slow Block subscriber silently turning a fast replay into a much slower one has no operator-visible signal at all.
 
-There is no pacing schedule to compare against yet — that is `08-pacing.md`'s job. This gauge measures Block-barrier wait time; M8 extends the definition once a schedule exists to compare it to.
+### Two slips, now that a schedule exists
+
+An absolute delivery schedule ships with the pacer (`internal/fanout/pacer.go`), so `pacing_slip` now names two different measurements, and they must not be read as one number. `Ring.PacingSlipNanos()` is the **cause**: real time the writer lost parked at the Block barrier. `Pacer.Slip()` is the **effect**: how far behind its own delivery schedule the most recent measured release was, or zero when that release was on time or early. The schedule is anchored once and never re-anchored, which is exactly what makes `Slip()` an observation instead of a correction — see [`clock.md`](./clock.md), "The delivery schedule is absolute and is never re-anchored".
+
+Neither number can be derived from the other. Barrier time is *one* cause of schedule lateness: a writer parked at the barrier releases nothing, so the schedule runs away from it and `Slip()` is where an operator sees that happen. It is not the only cause — the operating system's scheduler can make a release late with no Block subscriber involved at all — and it does not persist, because once the writer resumes every deadline is already in the past and the pacer releases at full speed until it catches up.
+
+`Slip()` is sampled per release batch, not per record: a run of records due inside one batching window is released with no clock read at all, and `Slip()` keeps its previous value across them. That is the same release-batching behaviour [`clock.md`](./clock.md) describes, and it is why `Slip()` is a gauge to watch rather than a per-record guarantee. `cmd/replayd` exports `Ring.PacingSlipNanos()` as the `replay_pacing_slip_nanoseconds` gauge and records it in the run manifest as `pacing_slip_nanos`; `Pacer.Slip()` has no gauge of its own yet, and real-clock schedule accuracy is measured by `BenchmarkPacingAccuracy` (`BENCHMARKS.md`) instead.
 
 ## Subscriber lifecycle and the control queue
 
-`Subscribe` and `Unsubscribe` resolve immediately, with no queue involved, until `Ring.StartEmitting` has been called — the common case of a subscriber set fixed before the first event (see `16-open-questions.md`'s Q4). Once emitting has started, a join or leave is **queued** and applied by the emit goroutine between records, via `applyControl`, rather than mutating the subscriber set while the emit goroutine might be iterating it. The queue is a mutex-guarded slice, not a channel: telling "queue this" apart from "the ring is closed" under one lock needs a condition a channel-based queue cannot express without a second `select` case on the receive, which is exactly the construct this package's `no-multi-select` rule keeps out.
+`Subscribe` and `Unsubscribe` resolve immediately, with no queue involved, until `Ring.StartEmitting` has been called — the common case of a subscriber set fixed before the first event (see "`StartAt` and reproducibility" below for what that case guarantees). Once emitting has started, a join or leave is **queued** and applied by the emit goroutine between records, via `applyControl`, rather than mutating the subscriber set while the emit goroutine might be iterating it. The queue is a mutex-guarded slice, not a channel: telling "queue this" apart from "the ring is closed" under one lock needs a condition a channel-based queue cannot express without a second `select` case on the receive, which is exactly the construct this package's `no-multi-select` rule keeps out.
 
 `applyControl` is cheap whether or not anything is pending, so the Block barrier's spin loop calls it on every iteration. That is what lets a departing Block subscriber release a writer parked waiting for it — without it, the barrier could deadlock on the last Block subscriber's own departure.
 

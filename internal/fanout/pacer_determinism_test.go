@@ -92,8 +92,8 @@ func runPacedForHash(t *testing.T, ds *synth.Dataset, num, den int64) (subResult
 // content as 1x under real waiting, because neither run here waits at
 // all — that is a structural property of SimClock, not a limitation of
 // this test's design, and real-clock accuracy has its own dedicated
-// test (BenchmarkPacingAccuracy, once it lands) and BENCHMARKS.md
-// section instead.
+// benchmark (BenchmarkPacingAccuracy, in pacer_accuracy_test.go) and
+// BENCHMARKS.md section instead.
 func TestDeterminismPacing(t *testing.T) {
 	dir := t.TempDir()
 	ds := synth.Standard(t, dir)
