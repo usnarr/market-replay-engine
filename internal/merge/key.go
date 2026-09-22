@@ -2,7 +2,7 @@
 // The k-way merge is a fixed-size loser tree, never container/heap: the
 // tree's shape is settled by the venue count at construction and never
 // changes as records are consumed, which is what makes the merged order
-// independent of how many workers decode. See docs/determinism.md.
+// independent of how many workers decode. See docs/merge.md.
 package merge
 
 import (

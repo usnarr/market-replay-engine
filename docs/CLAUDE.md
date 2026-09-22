@@ -5,6 +5,7 @@ Docs explain the **why**. The code shows the **what**. See the root [`CLAUDE.md`
 | File | Scope |
 |---|---|
 | [`format.md`](./format.md) | The hot-tier binary format: record layout, header, indexes, checksums, the canonical hash projection. |
+| [`merge.md`](./merge.md) | The merge stage: the fixed-size loser tree and why it is not `container/heap`, sentinel padding, the per-venue cursor, the worker pool and batch decode, and the seek-suffix contract. |
 | [`book.md`](./book.md) | Orderbook reconstruction: the sorted-slice level container, delta semantics, the snapshot-epoch contract, epoch-based seek warm-up, and the warm-up-delta emission policy. |
 | [`determinism.md`](./determinism.md) | What "deterministic" means precisely, the determinism boundary, and the first-party scoping of the `time.Now` invariant. |
 | [`backpressure.md`](./backpressure.md) | `Block` and `Drop` semantics, the shared-ring design, the lapping protocol, gap reporting, the drop-oldest overflow policy. |
