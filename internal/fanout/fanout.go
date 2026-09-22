@@ -1,6 +1,9 @@
 package fanout
 
-import "replay/internal/merge"
+import (
+	"replay/internal/merge"
+	"replay/internal/store"
+)
 
 // Run drains m into r, one record at a time, calling r.StartEmitting
 // itself so every Subscribe or Unsubscribe issued concurrently with Run
@@ -17,22 +20,7 @@ import "replay/internal/merge"
 // Run is not safe for concurrent use, matching Merger.Next's own rule:
 // one goroutine drives one Ring from one Merger.
 func (r *Ring) Run(m *merge.Merger) error {
-	r.StartEmitting()
-	for {
-		r.applyControl()
-
-		ev, ok, err := m.Next()
-		if err != nil {
-			return err
-		}
-		if !ok {
-			r.SetEnd(r.writeSeq.Load())
-			return nil
-		}
-		if _, err := r.Write(ev.Record, ev.Blob); err != nil {
-			return err
-		}
-	}
+	return r.RunDigest(m, nil, nil)
 }
 
 // RunPaced is Run with pacing: before writing each record, it calls
@@ -51,6 +39,19 @@ func (r *Ring) Run(m *merge.Merger) error {
 // never which record that is — Merger.Next has already chosen it, in
 // canonical order, before RunPaced ever sees it. See docs/clock.md.
 func (r *Ring) RunPaced(m *merge.Merger, p *Pacer) error {
+	return r.RunDigest(m, p, nil)
+}
+
+// RunDigest is the emit loop Run and RunPaced both wrap: a nil p skips
+// pacing, and a nil h skips the digest, so neither costs a caller that
+// does not want it more than one branch per record. A non-nil h receives
+// every record this loop writes, exactly once, on this same goroutine,
+// in the canonical order Merger.Next already fixed.
+//
+// Call h.Sum only after RunDigest returns nil. A non-nil return means the
+// run aborted before a clean end, and a partial digest is not meaningful:
+// an aborted run has no valid prefix, as Run documents above.
+func (r *Ring) RunDigest(m *merge.Merger, p *Pacer, h *store.CanonicalHasher) error {
 	r.StartEmitting()
 	started := false
 	for {
@@ -64,13 +65,18 @@ func (r *Ring) RunPaced(m *merge.Merger, p *Pacer) error {
 			r.SetEnd(r.writeSeq.Load())
 			return nil
 		}
-		if !started {
-			p.Start(ev.Record.ExchangeTs)
-			started = true
+		if p != nil {
+			if !started {
+				p.Start(ev.Record.ExchangeTs)
+				started = true
+			}
+			if !p.Wait(ev.Record.ExchangeTs) {
+				r.SetEnd(r.writeSeq.Load())
+				return nil
+			}
 		}
-		if !p.Wait(ev.Record.ExchangeTs) {
-			r.SetEnd(r.writeSeq.Load())
-			return nil
+		if h != nil {
+			h.Write(ev.Record, ev.Blob)
 		}
 		if _, err := r.Write(ev.Record, ev.Blob); err != nil {
 			return err
