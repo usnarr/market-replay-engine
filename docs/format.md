@@ -70,6 +70,8 @@ The header's defined fields occupy 128 bytes. Zero padding then runs out to `hea
 
 `header_size` is `os.Getpagesize()` at write time, rounded up to cover the fields. The writer stores the value it used, so a reader on a host with a different page size still finds record 0. Nothing assumes 4096: macOS on Apple silicon uses 16384-byte pages.
 
+A writer may also pin `header_size` instead of reading it from the host, through `store.NewWriterWithOptions`. `cmd/convert` does, for both `header_size` and `block_size_records`, because "the same input converts to the same bytes" cannot hold otherwise: a conversion on a 16384-byte-page host would put record 0 somewhere a 4096-byte-page host never would, and every offset in the file after it would shift. Pinning a page size costs a reader nothing — it reads `header_size` from the header either way.
+
 | Field | Type | Notes |
 |---|---|---|
 | `magic` | [8]byte | `\x89RPL\r\n\x1a\n` |

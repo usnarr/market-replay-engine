@@ -56,8 +56,10 @@ func TestRunManifest(t *testing.T) {
 			if f.Path == "" || !filepath.IsAbs(f.Path) {
 				t.Errorf("dataset file path %q is not absolute", f.Path)
 			}
-			if f.Bytes <= 0 {
-				t.Errorf("dataset file %q has size %d, want a positive size", f.Path, f.Bytes)
+			// internal/synth builds its files with store.NewWriter, not
+			// through cmd/convert, so none of them has a hash sidecar.
+			if f.Hash != "" {
+				t.Errorf("dataset file %q has hash %q, want none: nothing stamped one", f.Path, f.Hash)
 			}
 		}
 		// 10000/5000 reduces to 2/1: two requests for the same speed
@@ -149,4 +151,65 @@ func cmpDatasetFile(a, b DatasetFile) int {
 		return 1
 	}
 	return 0
+}
+
+func TestDatasetIdentity(t *testing.T) {
+	const digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+	t.Run("a_file_with_a_sidecar_carries_its_hash", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "venue-7-2024-01-01.bin")
+		if err := os.WriteFile(path, []byte("test"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v, want nil", err)
+		}
+		if err := os.WriteFile(path+hashSuffix, []byte(digest+"\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v, want nil", err)
+		}
+
+		got, err := datasetIdentity([]string{path})
+
+		if err != nil {
+			t.Fatalf("datasetIdentity() error = %v, want nil", err)
+		}
+		if len(got) != 1 || got[0].Hash != digest {
+			t.Errorf("datasetIdentity() = %+v, want one file with hash %s", got, digest)
+		}
+	})
+
+	t.Run("a_file_with_no_sidecar_carries_an_empty_hash", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "venue-7-2024-01-01.bin")
+		if err := os.WriteFile(path, []byte("test"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v, want nil", err)
+		}
+
+		got, err := datasetIdentity([]string{path})
+
+		if err != nil {
+			t.Fatalf("datasetIdentity() error = %v, want nil", err)
+		}
+		if len(got) != 1 || got[0].Hash != "" {
+			t.Errorf("datasetIdentity() = %+v, want one file with no hash", got)
+		}
+	})
+
+	t.Run("the_hash_field_is_always_serialized", func(t *testing.T) {
+		b, err := json.Marshal(DatasetFile{Path: "/data/venue-7.bin"})
+
+		if err != nil {
+			t.Fatalf("Marshal() error = %v, want nil", err)
+		}
+		want := `{"path":"/data/venue-7.bin","hash":""}`
+		if string(b) != want {
+			t.Errorf("Marshal(DatasetFile{}) = %s, want %s", b, want)
+		}
+	})
+
+	t.Run("a_file_that_does_not_exist", func(t *testing.T) {
+		_, err := datasetIdentity([]string{filepath.Join(t.TempDir(), "absent.bin")})
+
+		if !os.IsNotExist(err) {
+			t.Errorf("datasetIdentity(absent) error = %v, want a not-exist error", err)
+		}
+	})
 }

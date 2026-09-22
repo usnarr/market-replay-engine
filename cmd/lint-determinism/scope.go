@@ -11,11 +11,17 @@ func hotPath(pkgPath string) bool {
 
 // orderedPath reports whether pkgPath is one of the packages where an
 // unordered map iteration could reach output: internal/merge,
-// internal/fanout, internal/store, or internal/book. internal/book is off
-// the hot path (see internal/book/book.go), so it gets this rule but not
-// hotPath's any/fmt.Sprint rules.
+// internal/fanout, internal/store, internal/book, or cmd/convert.
+// internal/book and cmd/convert are both off the hot path (see
+// internal/book/book.go and docs/convert.md), so they get this rule but
+// not hotPath's any/fmt.Sprint rules. cmd/convert is held to it because
+// it must produce byte-identical artifacts, which makes its iteration
+// order as output-affecting as the replay path's.
 func orderedPath(pkgPath string) bool {
-	return hotPath(pkgPath) || inPathSegment(pkgPath, "internal/store") || inPathSegment(pkgPath, "internal/book")
+	return hotPath(pkgPath) ||
+		inPathSegment(pkgPath, "internal/store") ||
+		inPathSegment(pkgPath, "internal/book") ||
+		inPathSegment(pkgPath, "cmd/convert")
 }
 
 // inPathSegment reports whether seg appears as a whole "/"-separated

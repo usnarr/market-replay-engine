@@ -3,9 +3,11 @@ package main
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // The run manifest is how a finished run reaches cmd/catalogue. replayd
@@ -23,16 +25,27 @@ type Manifest struct {
 	Timing      Timing        `json:"timing"`
 }
 
-// DatasetFile identifies one input file.
-//
-// Path and size, because that is the identity available today: there is
-// no cmd/convert yet to stamp an artifact content hash into the file or
-// to hand one over. 11-convert-and-catalogue.md replaces these two
-// fields with that hash, which is the only identity that survives a
-// file being moved or rebuilt.
+// hashSuffix names an artifact's content-hash sidecar, the file
+// cmd/convert writes beside each artifact. The constant is repeated here
+// rather than imported: cmd/convert is a separate module, and replayd
+// links nothing of it. See docs/no-database.md.
+const hashSuffix = ".hash"
+
+// DatasetFile identifies one input file by path and by the content hash
+// cmd/convert stamped beside it. A hash survives a file being moved or
+// rebuilt; a size does not.
 type DatasetFile struct {
-	Path  string `json:"path"`
-	Bytes int64  `json:"bytes"`
+	Path string `json:"path"`
+
+	// Hash is the artifact's whole-file SHA-256, read from its sidecar.
+	// It is empty, and always serialized, for a file that has none: a
+	// hand-written fixture or an internal/synth build carries no
+	// converter-stamped identity, and "none" has to read differently from
+	// "not recorded".
+	//
+	// replayd never computes it. Doing so would mean reading every
+	// dataset file in full at startup only to write a manifest.
+	Hash string `json:"hash"`
 }
 
 // RunConfig is what the run was asked to do.
@@ -116,16 +129,35 @@ func datasetIdentity(files []string) ([]DatasetFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(path)
+		if _, err := os.Stat(path); err != nil {
+			return nil, err
+		}
+		hash, err := readHashSidecar(path)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, DatasetFile{Path: filepath.ToSlash(abs), Bytes: info.Size()})
+		out = append(out, DatasetFile{Path: filepath.ToSlash(abs), Hash: hash})
 	}
 	slices.SortFunc(out, func(a, b DatasetFile) int {
 		return cmp.Compare(a.Path, b.Path)
 	})
 	return out, nil
+}
+
+// readHashSidecar returns the content hash cmd/convert wrote beside
+// path, or the empty string when there is no sidecar. A missing sidecar
+// is a value, not a failure: a dataset file that no converter produced
+// simply has no stamped identity. Any other read failure is returned,
+// because "the sidecar is there and unreadable" is a different fact.
+func readHashSidecar(path string) (string, error) {
+	b, err := os.ReadFile(path + hashSuffix)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // writeManifest writes m to path, indented, with a trailing newline.
