@@ -25,20 +25,28 @@ When you make a change that affects a doc, update it in the same MR. Docs explai
 ## Project Structure
 
 ```
+api/                   # replay.proto and the gRPC code generated from it
 cmd/
   replayd/             # the server
   convert/             # Parquet → hot-tier format (separate Go module)
   catalogue/           # run manifest → SQLite ingestion (separate Go module)
+  lint-determinism/    # the project's own determinism analyzer (separate Go module)
 internal/
   store/               # mmap reader, writer, binary format
   merge/               # k-way merge, total ordering
   clock/               # Clock interface, SimClock
-  fanout/              # subscriber management, backpressure
+  fanout/              # subscriber management, backpressure, pacing
   book/                # orderbook snapshot + delta reconstruction
+  allocgate/           # the zero-allocation benchmark gate
+  synth/               # synthetic dataset generator, shared by the determinism suites
 bench/                 # load harness, reproducible make targets
+docs/                  # concept and reference docs, indexed by docs/CLAUDE.md
 profiles/              # committed pprof SVGs, one per version
 testdata/
 ```
+
+Four Go modules, listed in `go.work`: the root module, plus `cmd/convert`,
+`cmd/catalogue` and `cmd/lint-determinism`, each with its own dependencies.
 
 ## Common Commands
 
