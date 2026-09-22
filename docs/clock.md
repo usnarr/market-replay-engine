@@ -26,7 +26,7 @@ Every time value is a UnixNano `int64`, not a `time.Time`. `time.Time` is 24 byt
 
 ## Content and timing are separate concerns
 
-A `Clock` implementation changes only *when* a record is delivered. It never changes which records exist, their order, or their fields. This split is what lets the determinism suite run entirely under `SimClock` — which never sleeps in real time — while a separate, much smaller set of `RealClock`-based tests proves the pacing arithmetic is correct. See `TestDeterminism` in `internal/merge` and `internal/fanout` for the content side of this split, once those packages exist.
+A `Clock` implementation changes only *when* a record is delivered. It never changes which records exist, their order, or their fields. This split is what lets the determinism suite run entirely under `SimClock` — which never sleeps in real time — while a separate, much smaller set of `RealClock`-based tests proves the pacing arithmetic is correct. See `TestDeterminism` in `internal/merge` and `internal/fanout` for the content side of this split.
 
 ## `RealClock`
 
@@ -95,7 +95,7 @@ For a seek: `replay(from=T)` anchors `Pacer.Start` on the first record at or aft
 
 ## Release batching at sub-scheduler-resolution gaps
 
-At 10,000×, an inter-event gap of 1 microsecond in source data becomes 100 nanoseconds of intended real-time delay — below the resolution any `time.Sleep` or OS timer can reliably provide. **Q7's answer** (`16-open-questions.md`): 1×–10,000× is a **target pacing rate** with graceful batch-and-release degradation, not a per-event scheduling guarantee.
+At 10,000×, an inter-event gap of 1 microsecond in source data becomes 100 nanoseconds of intended real-time delay — below the resolution any `time.Sleep` or OS timer can reliably provide. **The resolved policy:** 1×–10,000× is a **target pacing rate** with graceful batch-and-release degradation, not a per-event scheduling guarantee.
 
 `measureWindow` measures the release-batching window once, at `Pacer` construction, by probing `Clock.SleepUntil` — never `Clock.NewTimer`, and that choice is load-bearing: a timer probe under `SimClock` would never fire, because nothing calls `Advance`, and the measurement would deadlock. It takes the worst of 8 samples (never the best or an average, so it never under-estimates a clock's actual resolution), floors at 1 microsecond, and caps at 10 milliseconds.
 

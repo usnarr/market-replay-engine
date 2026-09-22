@@ -12,7 +12,7 @@ The dependency is `github.com/parquet-go/parquet-go`, pinned at v0.25.1. Pure Go
 
 ## The canonical source schema
 
-**Provisional.** This schema is a starting point, not a commitment. It was designed against `store.Record`, not against real archive data, because no sample of the latter exists yet. Revisit it once real source data does — the plan file that specifies this milestone flags exactly this, and a schema that no real producer writes is worth changing.
+**Provisional.** This schema is a starting point, not a commitment. It was designed against `store.Record`, not against real archive data, because no sample of the latter exists yet. Revisit it once real source data does: a schema that no real producer writes is worth changing.
 
 One schema, never a configurable mapping. A mapping layer would put the question "which column was `price`?" between an artifact and its inputs, and that question has to have one answer for "the same input converts to the same bytes" to mean anything.
 
@@ -114,7 +114,7 @@ Three things make it true.
 
 Each finished artifact gets a `<artifact>.hash` file holding its whole-file SHA-256 as lowercase hex and a newline — the digest alone, no file name, so nothing has to parse around a path that may since have moved. A run manifest carries this value, which is what scopes the project's determinism claim honestly: deterministic *given a fixed, identified artifact*, with that identity independently checkable by anyone who has the file.
 
-It is not the per-record `canonical_v1` projection `store.CanonicalSHA256` computes. That hash deliberately ignores where bytes sit in a file, so two conversions that pack blobs differently still match. This one is the opposite: it is about one file's exact bytes.
+It is not the per-record `canonical_v1` projection a `store.CanonicalHasher` computes under the `store.CanonicalSHA256` algorithm. That hash deliberately ignores where bytes sit in a file, so two conversions that pack blobs differently still match. This one is the opposite: it is about one file's exact bytes.
 
 **Not in the header.** The header has nine reserved bytes across three ranges, and `internal/store` validates every one of them as zero; 32 do not fit. Writing the digest into the zero padding past the 128 defined bytes would be worse: the hash would then cover itself, and "the hash of everything except this hash" is a different, weaker thing than "the hash of this file".
 

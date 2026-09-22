@@ -40,7 +40,7 @@ The boundary is `internal/fanout.Subscriber.Next`. Everything up to and includin
 
 This is a deliberate line, not an oversight. gRPC and the transport stack below it introduce real sources of nondeterminism that this project does not control, and folding them into the core suite would do one of two harmful things: make "the determinism test" flaky for reasons that have nothing to do with merge or fan-out, or force the test to hash less of the stream so that it keeps passing. Both outcomes weaken the one claim this project makes.
 
-The wire format is therefore **not** inside the determinism contract, and `16-open-questions.md`'s Q9 is answered no.
+The wire format is therefore **not** inside the determinism contract. That was an open question during design, and it is settled: no.
 
 What covers the transport instead is a separate test, `TestIntegrationGRPCHashMatchesInProcess` in `cmd/replayd`. It starts a real gRPC server, connects a real client, and asserts that the canonical hash the client computes from the messages it received equals the in-process merged hash for the same dataset. It catches truncation, reordering, and codec or schema mistakes. Those are a different class of bug from a merge-ordering or fan-out-lapping bug: different causes, different fixes, and a different place to look. Its name deliberately does not begin with `TestDeterminism`, so `make determinism`'s `-run TestDeterminism` never sweeps it into the core suite.
 

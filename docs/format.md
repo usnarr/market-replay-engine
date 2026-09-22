@@ -77,6 +77,7 @@ A writer may also pin `header_size` instead of reading it from the host, through
 | `magic` | [8]byte | `\x89RPL\r\n\x1a\n` |
 | `format_version` | uint32 | exact match; a reader never guesses at compatibility |
 | `venue_id` | uint16 | every record in the file carries this venue |
+| reserved | — | bytes [14, 16); must be zero |
 | `price_scale` | int64 | positive power-of-ten divisor for `price` and `size` |
 | `record_count` | uint64 | |
 | `min_exchange_ts` | int64 | zero when the file holds no records |
@@ -91,8 +92,12 @@ A writer may also pin `header_size` instead of reading it from the host, through
 | `snapshot_index_count` | uint64 | |
 | `footer_offset` | uint64 | |
 | `trailer_crc32c` | uint32 | covers both indexes and the footer |
+| reserved | — | bytes [116, 120); must be zero |
 | `finalized` | uint8 | 0 or 1 |
+| reserved | — | bytes [121, 124); must be zero |
 | `header_crc32c` | uint32 | covers bytes 0 to 120 |
+
+Nine reserved bytes, across those three ranges. `internal/store` validates every one of them as zero and returns `ErrReserved` otherwise, the same rule the record layout follows: every byte is defined, so two headers that mean the same thing cannot differ in bytes nothing reads. The ranges exist because each following field is aligned to its own width — `price_scale` to 8, `finalized` after the checksummed prefix, `header_crc32c` to 4.
 
 The magic ends with the PNG `\r\n\x1a\n` run. Git on Windows converts the line endings of a file it mistakes for text. That turns into a magic mismatch here, not a silently corrupt record array.
 
