@@ -70,6 +70,7 @@ Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th 
 | Date | Commit | Change | Before | After | Profile |
 |---|---|---|---|---|---|
 | 2026-09-20 | (this commit) | M6: shared ring, atomic-word slot | — | see below | — |
+| 2026-09-22 | f4662da | `RunDigest`: an optional running canonical hash in the emit loop | 54.19 ns/op (`RingWrite/no_blob`) | 65.21 ns/op (`RunDigest/delta_only`) | — |
 
 ```
 BenchmarkRingWrite/no_blob-8               56.87 ns/op   0 B/op   0 allocs/op
@@ -98,6 +99,42 @@ this package, "ring write and ring read including the lapping protocol" (`read` 
 the same load-copy-reload path a lapped read takes). Verified the gate actually
 catches a regression: a deliberately introduced allocation in the write path failed
 the benchmark with the expected message, reverted before committing.
+
+### `RunDigest`
+
+`RunDigest` is the emit loop `Run` and `RunPaced` now wrap. It adds two optional
+per-record steps: the pacer check, and one `store.CanonicalHasher.Write`. Every row
+below is the median of `-count=5` from a single `go test -bench` invocation,
+including the baselines, so the rows are comparable to each other. They are not
+comparable to the M6 rows above, which a different invocation produced — an earlier
+draft of this section compared across two invocations and read a 2 ns difference as
+noise that a single-invocation run shows is real.
+
+```
+BenchmarkRingWrite/no_blob-8                54.19 ns/op   0 B/op   0 allocs/op
+BenchmarkRingWrite/with_a_snapshot_blob-8   96.31 ns/op   0 B/op   0 allocs/op
+BenchmarkRunDigest/delta_only-8             65.21 ns/op   0 B/op   0 allocs/op
+BenchmarkRunDigest/with_a_snapshot_blob-8  113.30 ns/op   0 B/op   0 allocs/op
+BenchmarkRunDigest/nil_hasher-8             56.58 ns/op   0 B/op   0 allocs/op
+```
+
+The digest costs about 11 ns per delta record and about 17 ns per 52-byte snapshot
+record, beside the ring write it runs with. `nil_hasher` is the path `Run` and
+`RunPaced` themselves now take: 56.58 ns/op against `BenchmarkRingWrite/no_blob`'s
+54.19 ns/op. That 2.4 ns is an upper bound on what the option costs a caller who
+declines it, and most of it is the benchmark's own construct rather than
+`RunDigest`: the sub-benchmark holds its nil hasher in a package-level variable so
+the compiler cannot fold the branch away, and that load is a cost the real loop does
+not pay, since `RunDigest`'s hasher is a parameter. Measuring the branch honestly
+costs more than the branch does.
+
+All three sub-benchmarks are gated by `internal/allocgate.AssertZero`. The snapshot
+case is gated here for the first time: `internal/store`'s own gate covers
+`CanonicalHasher.Write` for a record with no blob, and a blob-carrying write at this
+call site is a different measurement, not an inherited one. Verified the gate
+catches a regression at this call site too: a deliberately introduced allocation in
+`delta_only`'s step failed with `allocgate: expected zero allocations, got 1.0000
+allocs/op averaged over 200 runs`, reverted before committing.
 
 ## Encode/decode throughput
 
