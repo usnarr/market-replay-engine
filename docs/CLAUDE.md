@@ -10,6 +10,7 @@ Docs explain the **why**. The code shows the **what**. See the root [`CLAUDE.md`
 | [`determinism.md`](./determinism.md) | What "deterministic" means precisely, the determinism boundary, and the first-party scoping of the `time.Now` invariant. |
 | [`backpressure.md`](./backpressure.md) | `Block` and `Drop` semantics, the shared-ring design, the lapping protocol, gap reporting, the drop-oldest overflow policy. |
 | [`clock.md`](./clock.md) | The `Clock` interface, `RealClock`, `SimClock`, pacing, the rational speed representation, and the release-batching policy at high speed. |
+| [`replayd.md`](./replayd.md) | The server and its gRPC API: the `Subscribe` contract, start positions and rational speed on the wire, the status-code mapping, the pinned flow-control windows, the metrics, and `cmd/replayd`'s flag surface. |
 | [`convert.md`](./convert.md) | The archive-tier converter: the canonical source Parquet schema, the venue partitioning policy, snapshot epoch placement, byte-reproducible artifacts, the artifact content hash, and what `cmd/convert` rejects rather than repairs. |
 | [`no-database.md`](./no-database.md) | Why the project never adds a database, and the run-manifest handoff between `replayd` and `cmd/catalogue` that keeps that true. |
 
