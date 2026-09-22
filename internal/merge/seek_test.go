@@ -21,6 +21,13 @@ func replayAllEvents(t *testing.T, cursors []*Cursor) []Event {
 	if err != nil {
 		t.Fatalf("NewMerger() error = %v, want nil", err)
 	}
+	return drainEvents(t, m)
+}
+
+// drainEvents reads m to exhaustion and closes it.
+func drainEvents(t *testing.T, m *Merger) []Event {
+	t.Helper()
+
 	defer func() {
 		if err := m.Close(); err != nil {
 			t.Errorf("Close() error = %v, want nil", err)

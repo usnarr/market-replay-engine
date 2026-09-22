@@ -59,7 +59,7 @@ Three test tiers, all in `make test`:
 
 1. **Unit** — pure functions, format encode/decode, merge ordering
 2. **Determinism** — `TestDeterminism` replays the same dataset at 1, 4, 16 and 64 workers and asserts an identical output hash, at both the merged stream and every Block subscriber. Also runs a chaos variant that injects random scheduling delays into reader goroutines, and a seek-suffix variant that asserts `replay(from=T)` is an exact suffix of `replay(from=0)`. **This test is the project's core assertion. It must never be skipped, weakened, or made tolerant.**
-3. **Allocation** — benchmarks assert `allocs/op == 0` on the hot path, checked via raw `MemAllocs`/`MemBytes`, not the divided `AllocsPerOp()` value. A change that introduces an allocation there fails CI.
+3. **Allocation** — benchmarks assert zero allocations and zero allocated bytes on the hot path, through `internal/allocgate`. It measures with `testing.AllocsPerRun` and its own `MemStats` byte pass, never with a nested `testing.Benchmark` call: that deadlocks on the `testing` package's own mutex, and a float64 average cannot round a genuine allocation down to zero the way `AllocsPerOp()`'s integer division can — see the package's doc comment. A change that introduces an allocation there fails CI.
 
 Fuzz target on the binary decoder: `make fuzz`.
 

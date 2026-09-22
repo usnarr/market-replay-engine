@@ -13,4 +13,5 @@ var (
 	ErrDuplicateKey   = errors.New("merge: two records share an ordering key")
 	ErrOutOfOrder     = errors.New("merge: record key does not increase")
 	ErrWorkerCount    = errors.New("merge: worker count must be positive")
+	ErrBatchShape     = errors.New("merge: batch shape must hold at least one record and two batches")
 )
