@@ -1,7 +1,13 @@
 CLAUDE-02-replay-engine.md
 plans/
 worktrees/
-bench/results/
+# The directory is committed (its .gitkeep is), its generated contents are
+# not. The pattern has to exclude the directory's *contents* rather than
+# the directory itself: git cannot re-include a file whose parent
+# directory is excluded, so `bench/results/` plus a negation would ignore
+# the .gitkeep too.
+bench/results/*
+!bench/results/.gitkeep
 testdata/large/
 *.prof
 *.pprof

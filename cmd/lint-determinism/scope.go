@@ -11,17 +11,21 @@ func hotPath(pkgPath string) bool {
 
 // orderedPath reports whether pkgPath is one of the packages where an
 // unordered map iteration could reach output: internal/merge,
-// internal/fanout, internal/store, internal/book, or cmd/convert.
-// internal/book and cmd/convert are both off the hot path (see
-// internal/book/book.go and docs/convert.md), so they get this rule but
-// not hotPath's any/fmt.Sprint rules. cmd/convert is held to it because
-// it must produce byte-identical artifacts, which makes its iteration
-// order as output-affecting as the replay path's.
+// internal/fanout, internal/store, internal/book, cmd/convert, or bench.
+// internal/book, cmd/convert and bench are all off the hot path (see
+// internal/book/book.go, docs/convert.md and bench/harness.go), so they
+// get this rule but not hotPath's any/fmt.Sprint rules. cmd/convert is
+// held to it because it must produce byte-identical artifacts, which
+// makes its iteration order as output-affecting as the replay path's.
+// bench is held to it because the load harness chooses the order venues
+// enter the merge tree and the order subscribers register, and both are
+// output-affecting for the stream it measures.
 func orderedPath(pkgPath string) bool {
 	return hotPath(pkgPath) ||
 		inPathSegment(pkgPath, "internal/store") ||
 		inPathSegment(pkgPath, "internal/book") ||
-		inPathSegment(pkgPath, "cmd/convert")
+		inPathSegment(pkgPath, "cmd/convert") ||
+		inPathSegment(pkgPath, "bench")
 }
 
 // inPathSegment reports whether seg appears as a whole "/"-separated
