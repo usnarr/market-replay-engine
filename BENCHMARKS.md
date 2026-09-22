@@ -212,4 +212,55 @@ the assertion it backs.
 
 ## End-to-end replay rate
 
-_No measurements yet. First entry lands once `cmd/replayd` (M9) can run a full synthetic dataset end to end._
+Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th Gen Intel Core i7-11370H @ 3.30GHz.
+
+| Date | Commit | Change | Before | After | Profile |
+|---|---|---|---|---|---|
+| 2026-09-22 | 7400143 | M7: first end-to-end rate, measured over the new `bench` load harness | — | see below | — |
+
+```
+BenchmarkEndToEndReplay/unpaced_max_rate-8   12    95130225 ns/op   4204762 records/s   1434078 B/op   592 allocs/op
+BenchmarkEndToEndReplay/paced_100x-8         10   100325790 ns/op   3987011 records/s   1437276 B/op   593 allocs/op
+```
+
+The `Commit` column names `7400143`, the commit that added the harness being measured,
+because a row cannot carry the hash of the commit it lands in. Three `-count=3` samples
+spanned 94.74-95.15 ms/op unpaced and 100.25-100.44 ms/op paced, so the numbers above
+are representative rather than a lucky pass.
+
+One iteration is one whole replay of a 400,000-record synthetic dataset (four venues,
+six files — `benchShape` in `bench/harness_bench_test.go`) through the entire in-process
+stack: memory-mapped files, one cursor per venue, a four-worker `merge.Merger`, a
+1024-slot `fanout.Ring`, and four subscribers (two Block, two Drop) each draining on its
+own goroutine. So `ns/op` is the cost of a complete replay and `records/s` is the
+end-to-end rate.
+
+This measures the in-process path, up to and including fan-out delivery. It does not
+cross a socket, so it is not a `cmd/replayd` gRPC number; the determinism boundary is
+drawn at the same place for the same reason (see `docs/determinism.md`). A transport-level
+row belongs in this section too once one is measured, alongside this one rather than
+replacing it.
+
+The 5.2 ms the paced case adds is almost entirely `fanout.NewPacer`'s one-time
+release-batching window measurement, which costs 4.22 ms on this machine: eight probe
+sleeps through `RealClock.SleepUntil`, whose resolution works out to roughly 0.5 ms here.
+The remaining ~1.0 ms over 400,000 records is about 2.5 ns per record, consistent with
+`BenchmarkPacerWait`'s own 1.542 ns/op fast path in the Pacing accuracy section above.
+
+At 100x this dataset never actually waits. `internal/synth` advances `exchange_ts` by 0
+to 3 nanoseconds per record, so the whole dataset spans well under a millisecond of
+source time, and every record is already due by the time the pacer is asked about it.
+The paced row therefore measures the pacer's per-record cost on the release-batching
+fast path, not real-time sleeping. A row that measures genuine waiting needs a dataset
+whose timestamps span real seconds; `internal/synth`'s fixture is deliberately dense,
+because its own job is the determinism suite.
+
+`BenchmarkEndToEndReplay` is not allocation-gated, and must not be. The zero-allocation
+invariant is scoped to the in-process path *up to* the fan-out boundary, and this
+benchmark spans past it: it opens files, builds a tree, and starts a goroutine per
+subscriber, all of which allocate once per replay. The ~1.4 MB and ~590 allocations per
+iteration are that per-replay setup, not a per-record cost — 592 allocations against
+400,000 records is one per ~680 records. The per-record paths the invariant does cover
+are gated in `internal/store`, `internal/merge` and `internal/fanout`, and each reports
+0 B/op in the sections above. See `docs/book.md`'s "Off the hot path: no allocation gate"
+for the same reasoning applied to `internal/book`.
