@@ -71,6 +71,7 @@ Environment for every row below: `go1.23.4 windows/amd64`, `GOMAXPROCS=8`, 11th 
 |---|---|---|---|---|---|
 | 2026-09-20 | (this commit) | M6: shared ring, atomic-word slot | — | see below | — |
 | 2026-09-22 | f4662da | `RunDigest`: an optional running canonical hash in the emit loop | 54.19 ns/op (`RingWrite/no_blob`) | 65.21 ns/op (`RunDigest/delta_only`) | — |
+| 2026-09-22 | fdd0fee | the reader-side lapping protocol, measured and gated for the first time | 15.02 ns/op (`RingRead`, never lapped) | 187.1 ns/op (`RingLappedRead`) | — |
 
 ```
 BenchmarkRingWrite/no_blob-8               56.87 ns/op   0 B/op   0 allocs/op
@@ -95,10 +96,13 @@ bottleneck.
 
 `internal/allocgate.AssertZero` now gates `BenchmarkRingWrite/no_blob` and
 `BenchmarkRingRead` — the two targets `plans/13-bench-and-profiles.md` names for
-this package, "ring write and ring read including the lapping protocol" (`read` is
-the same load-copy-reload path a lapped read takes). Verified the gate actually
-catches a regression: a deliberately introduced allocation in the write path failed
-the benchmark with the expected message, reverted before committing.
+this package, "ring write and ring read including the lapping protocol". `read`
+stood in for the lapped read when this row was written: it is the same
+load-copy-reload path, but no writer ever laps it, so the catch-up branch and the
+gap it reports were never actually executed. The lapping protocol has its own
+measured, gated row now — see below. Verified the gate actually catches a
+regression: a deliberately introduced allocation in the write path failed the
+benchmark with the expected message, reverted before committing.
 
 ### `RunDigest`
 
@@ -135,6 +139,35 @@ call site is a different measurement, not an inherited one. Verified the gate
 catches a regression at this call site too: a deliberately introduced allocation in
 `delta_only`'s step failed with `allocgate: expected zero allocations, got 1.0000
 allocs/op averaged over 200 runs`, reverted before committing.
+
+### The lapping protocol
+
+`BenchmarkRingLappedRead` drives a `Drop` subscriber through `Subscriber.Next` past
+a slot the writer has already overwritten, so one call runs the whole protocol: the
+rejected read, the catch-up, the successful read at the new index, and the gap it
+reports. Nothing measured this before — `BenchmarkRingRead` re-reads slot 0 of a
+ring nobody laps.
+
+```
+BenchmarkRingWrite/with_a_snapshot_blob-8   96.31 ns/op   0 B/op   0 allocs/op
+BenchmarkRingRead-8                         15.02 ns/op   0 B/op   0 allocs/op
+BenchmarkRingLappedRead-8                  187.10 ns/op   0 B/op   0 allocs/op
+```
+
+A lapped read costs about 12 times an ordinary one. The successful read accounts for
+about 15 ns of that, by the `BenchmarkRingRead` row above, and the rejected read
+before it for less again, since that one bails at the first `seq` load; the rest is
+the `runtime.Gosched` the catch-up loop runs between them. That yield is deliberate
+and is not a target for optimisation: it stops a tight catch-up loop from
+monopolising a core while it converges against a faster writer (see
+`internal/fanout.Ring.next`). A `Drop` subscriber pays this only when it has already
+been lapped, which is the case where it is behind anyway.
+
+`BenchmarkRingWrite/with_a_snapshot_blob` is gated from this commit too. It reported
+zero allocations from the start but was never gated, with no stated reason — unlike
+`BenchmarkPacerWait/arms_the_timer_once_per_wait`, which is deliberately excluded
+and says why. An ungated benchmark with no reason is indistinguishable from an
+oversight, so this one is now gated rather than explained.
 
 ## Encode/decode throughput
 

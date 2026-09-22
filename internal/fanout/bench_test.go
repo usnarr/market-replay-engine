@@ -63,15 +63,19 @@ func BenchmarkRingWrite(b *testing.B) {
 			ExchangeTs: 1, RecordType: store.RecordTypeSnapshotPointer,
 			BlobLen: uint32(len(payload)) + 4,
 		}
-		b.ReportAllocs()
-		b.ResetTimer()
-
-		for i := 0; i < b.N; i++ {
+		write := func() {
 			n, err := r.Write(rec, payload)
 			if err != nil {
 				b.Fatalf("Write() error = %v, want nil", err)
 			}
 			sinkUint64 = n
+		}
+		allocgate.AssertZero(b, write)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			write()
 		}
 	})
 }
@@ -179,5 +183,58 @@ func BenchmarkRingRead(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		read()
+	}
+}
+
+// BenchmarkRingLappedRead measures the lapping protocol from the read
+// side: a Drop subscriber whose slot the writer has already overwritten,
+// through Subscriber.Next, so one call performs the rejected read, the
+// catch-up, the successful read, and the gap it reports. BenchmarkRingRead
+// above never reaches any of that — it re-reads slot 0 of a ring nobody
+// laps — so this path had no measurement and no allocation gate of its
+// own until here. See docs/backpressure.md.
+//
+// The step rewinds this subscriber's own cursor instead of writing more
+// records on each call, so what it measures is one lapped read rather
+// than a lapped read plus the writes that caused it. That reaches
+// directly into unexported fields, which only a benchmark inside this
+// package can do, and which no subscriber ever does to itself.
+func BenchmarkRingLappedRead(b *testing.B) {
+	// The smallest legal ring, so three writes are enough to lap a
+	// subscriber sitting at index 0 by a whole capacity.
+	r, err := NewRing(Config{Capacity: 2, MaxBlobBytes: 0})
+	if err != nil {
+		b.Fatalf("NewRing() error = %v, want nil", err)
+	}
+	sub, err := r.Subscribe(ModeDrop, Beginning())
+	if err != nil {
+		b.Fatalf("Subscribe(Drop) error = %v, want nil", err)
+	}
+	for i := 0; i < r.Capacity()+1; i++ {
+		if _, err := r.Write(benchDelta, nil); err != nil {
+			b.Fatalf("Write() error = %v, want nil", err)
+		}
+	}
+
+	lappedRead := func() {
+		sub.pos = 0
+		sub.cursor.Store(0)
+
+		d, ok, err := sub.Next()
+		if err != nil {
+			b.Fatalf("Next() error = %v, want nil", err)
+		}
+		if !ok || !d.HasGap {
+			b.Fatalf("Next() delivered ok = %v, gap = %v, want a lapped read reporting a gap", ok, d.HasGap)
+		}
+		sinkRecord = d.Record
+		sinkUint64 = d.Gap.Count
+	}
+	allocgate.AssertZero(b, lappedRead)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		lappedRead()
 	}
 }
