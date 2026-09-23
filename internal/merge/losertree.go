@@ -6,7 +6,7 @@ package merge
 // guarantee rests on is a different one: the tree's shape is settled by
 // k at construction and never changes, however the data is distributed
 // and however many cursors run out. A heap re-shapes itself on every
-// pop. See docs/determinism.md.
+// pop. See docs/merge.md.
 //
 // Keys are cached here, one per cursor, so a comparison reads two
 // 24-byte values and never calls back into a store reader to decode a

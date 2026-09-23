@@ -41,13 +41,26 @@ determinism:
 	go test -run TestDeterminism -v ./internal/merge/... ./internal/fanout/...
 
 # CPU and memory profile, one pair of .prof files per package in
-# PROFILE_PKGS: go test -bench refuses -cpuprofile/-memprofile against
-# more than one package in a single invocation, so profiling the whole
-# hot path needs one go test call per package, not one call over ./....
-# Generate a committed SVG per version with, for example:
-#   go tool pprof -svg profiles/merge-cpu.prof > profiles/merge-cpu-<sha>.svg
-# go tool pprof -svg shells out to Graphviz's `dot`; that is a
-# prerequisite of this follow-up step alone, not of this target.
+# PROFILE_PKGS, then one committed SVG per profile: go test -bench refuses
+# -cpuprofile/-memprofile against more than one package in a single
+# invocation, so profiling the whole hot path needs one go test call per
+# package, not one call over ./....
+#
+# The SVG is the durable artifact the specification asks for -- one
+# committed pprof SVG per version -- so it is named with the current short
+# commit hash and lives beside the others in profiles/. The raw .prof is a
+# regenerable intermediate and stays gitignored.
+#
+# go tool pprof -svg shells out to Graphviz's `dot`, so this target needs
+# dot on PATH. The .prof files are already written by the time the SVG step
+# runs, so a missing dot costs the profiles nothing: install Graphviz and
+# re-run.
+#
+# -cpuprofile's own sampling goroutine used to make internal/allocgate's
+# byte pass report a false allocation, since that pass reads process-wide
+# runtime.MemStats.TotalAlloc. AssertZero now skips its own check under
+# -cpuprofile instead of failing (see its doc comment), so this target
+# checks the benchmark run's exit status normally, the same as make bench.
 #
 # go test also leaves the compiled test binary (<pkg>.test, .exe on
 # Windows) in the repo root when a profiling flag is set -- pprof's own
@@ -57,9 +70,13 @@ PROFILE_PKGS ?= internal/store internal/merge internal/fanout
 
 profile:
 	mkdir -p profiles
+	sha=$$(git rev-parse --short HEAD); \
 	for pkg in $(PROFILE_PKGS); do \
 		name=$$(basename $$pkg); \
 		go test -run=^$$ -bench=. -cpuprofile=profiles/$$name-cpu.prof -memprofile=profiles/$$name-mem.prof ./$$pkg/... || exit 1; \
+		for kind in cpu mem; do \
+			go tool pprof -svg profiles/$$name-$$kind.prof > profiles/$$name-$$kind-$$sha.svg || exit 1; \
+		done; \
 	done
 
 # go vet, staticcheck, and the project's own determinism analyzer,

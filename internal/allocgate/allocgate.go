@@ -14,6 +14,7 @@
 package allocgate
 
 import (
+	"flag"
 	"runtime"
 	"testing"
 )
@@ -70,10 +71,29 @@ const assertRuns = 200
 // never executes a Benchmark body at all, since it passes no -bench
 // flag. The skip here guards a developer who runs
 // `go test -race -bench=.` by hand.
+//
+// It also skips under -cpuprofile, for a different reason and a
+// different way. bytesPerRun's own doc comment already names the
+// exposure: TotalAlloc counts the whole process, so another goroutine
+// allocating during the measured window is charged to fn regardless of
+// what fn does. -cpuprofile's sampling goroutine is exactly such a
+// goroutine, and it is running throughout make profile's own
+// -bench=. invocation — confirmed by running each gate one flag at a
+// time: -memprofile alone measures clean, -cpuprofile alone does not.
+// The skip here is a plain return, not b.Skip: b.Skip calls
+// runtime.Goexit, which would abort the calling benchmark before it
+// ever reaches its own b.N loop, losing that benchmark's profile
+// samples entirely — the opposite of what make profile runs the
+// benchmark for. A return only skips this function's own check; the
+// caller's own timing loop, wherever it is relative to this call,
+// still runs and still gets profiled.
 func AssertZero(b *testing.B, fn func()) {
 	b.Helper()
 	if raceEnabled {
 		b.Skip("allocgate: skipped under -race, whose own instrumentation allocates")
+	}
+	if cpuProfilingActive() {
+		return
 	}
 
 	if got := testing.AllocsPerRun(assertRuns, fn); got != 0 {
@@ -82,6 +102,15 @@ func AssertZero(b *testing.B, fn func()) {
 	if got := bytesPerRun(assertRuns, fn); got != 0 {
 		b.Fatalf("allocgate: expected zero bytes allocated, got %d bytes over %d runs", got, assertRuns)
 	}
+}
+
+// cpuProfilingActive reports whether -test.cpuprofile is set. testing
+// registers this flag on the standard flag.CommandLine before any
+// Test or Benchmark function runs, so looking it up here needs no
+// dependency on the testing.B passed to AssertZero.
+func cpuProfilingActive() bool {
+	f := flag.Lookup("test.cpuprofile")
+	return f != nil && f.Value.String() != ""
 }
 
 // bytesPerRun returns how many bytes fn allocates over runs calls. It is

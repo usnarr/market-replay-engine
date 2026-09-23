@@ -26,7 +26,7 @@ Applying a delta that removes a price not currently in the book is `ErrLevelNotF
 
 ## The epoch-run contract
 
-A **snapshot epoch** is a contiguous run of consecutive `RecordTypeSnapshotPointer` records in the record stream, one per active instrument, all at the same point in the stream. This is the contract `cmd/convert` must produce when it exists (see `04-binary-format.md`'s snapshot-epoch resolution and `format.md`'s "Snapshot epochs" section): every instrument gets a snapshot together, so one epoch index answers the seek question for every instrument at once.
+A **snapshot epoch** is a contiguous run of consecutive `RecordTypeSnapshotPointer` records in the record stream, one per active instrument, all at the same point in the stream. This is the contract `cmd/convert` produces: see `format.md`'s "Snapshot epochs" section for the format's own statement of it, and `convert.md`'s for where the converter places an epoch and why. Every instrument gets a snapshot together, so one epoch index answers the seek question for every instrument at once.
 
 `store.Reader.SnapshotBefore` is instrument-agnostic: it returns the last snapshot-pointer record at or before a given index, regardless of which instrument it names. For a multi-instrument epoch this lands on the epoch run's *last* record, not its first. `internal/book` resolves this itself: it walks backward from that record over the contiguous run of snapshot-pointer records to find the run's start, then forward through the run to find the specific record for the instrument it wants.
 
@@ -47,7 +47,7 @@ When no snapshot precedes `targetTs` — including a target at or before the fil
 
 ## Warm-up deltas are consumed internally, never re-emitted
 
-This is the open question `09-book.md` leaves for this package to resolve: whether the deltas `WarmUp` replays between an epoch and the seek target are emitted to a subscriber (flagged as pre-`T` warm-up) or consumed internally and discarded once the resulting `Book` is built.
+The question this package had to settle: whether the deltas `WarmUp` replays between an epoch and the seek target are emitted to a subscriber (flagged as pre-`T` warm-up) or consumed internally and discarded once the resulting `Book` is built.
 
 **Decision: consumed internally, never re-emitted.** `WarmUp` returns a `*Book` and a resume index; the deltas it applied along the way exist only as intermediate mutations to that `Book` value and are not surfaced anywhere else. A subscriber that seeks to `T` receives the merged stream starting at the resume index onward — nothing earlier, warm-up or otherwise.
 
