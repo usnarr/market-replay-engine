@@ -1,6 +1,7 @@
 package allocgate
 
 import (
+	"flag"
 	"runtime"
 	"testing"
 )
@@ -100,6 +101,38 @@ func TestAssertZero(t *testing.T) {
 		// there is no error return to check directly.
 		if res.N != 0 {
 			t.Errorf("testing.Benchmark(...) ran %d iterations, want 0: AssertZero should have failed", res.N)
+		}
+	})
+
+	t.Run("under_cpuprofile_skips_its_own_check_but_not_the_callers_loop", func(t *testing.T) {
+		if raceEnabled {
+			t.Skip("allocgate: -race's own skip takes precedence and returns before this check would run")
+		}
+
+		f := flag.Lookup("test.cpuprofile")
+		if f == nil {
+			t.Fatal("test.cpuprofile flag is not registered by the testing package")
+		}
+		old := f.Value.String()
+		if err := f.Value.Set("allocgate-test-marker.prof"); err != nil {
+			t.Fatalf("setting test.cpuprofile: %v", err)
+		}
+		defer func() { _ = f.Value.Set(old) }()
+
+		ranOwnLoop := false
+		res := testing.Benchmark(func(b *testing.B) {
+			// This fn allocates, which would fail AssertZero's own
+			// check outside of -cpuprofile — see the sibling subtest
+			// above. Passing here proves the check itself was skipped,
+			// not that fn happened not to allocate.
+			AssertZero(b, func() { sinkBytes = make([]byte, 64) })
+			for i := 0; i < b.N; i++ {
+				ranOwnLoop = true
+			}
+		})
+
+		if res.N == 0 || !ranOwnLoop {
+			t.Fatalf("the calling benchmark's own loop did not run after AssertZero returned (res.N=%d, ranOwnLoop=%v): a plain return must not behave like b.Skip", res.N, ranOwnLoop)
 		}
 	})
 }
