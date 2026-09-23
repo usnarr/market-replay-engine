@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/hex"
 	"errors"
 	"math"
 	"net/http"
@@ -477,9 +478,11 @@ func (s *Server) countSubscriber(mode fanout.BackpressureMode, startKind string)
 }
 
 // run drains the merge into the ring until the stream ends, then
-// releases everything the run held.
+// releases everything the run held. The digest is built here, once, and
+// handed to RunDigest: the emit loop hashes every record it writes, on
+// its own goroutine, so the manifest costs the run no second consumer.
 //
-// RunPaced deliberately does not call SetEnd when it fails: an aborted
+// RunDigest deliberately does not call SetEnd when it fails: an aborted
 // run has no valid prefix to hand subscribers. That leaves every
 // subscriber parked in Next with nothing to wake it, so this is where
 // the ring is ended on that path. The error is still reported, through
@@ -487,17 +490,18 @@ func (s *Server) countSubscriber(mode fanout.BackpressureMode, startKind string)
 func (s *Server) run(p *fanout.Pacer) {
 	defer close(s.runDone)
 
-	err := s.ring.RunPaced(s.merger, p)
+	h := store.NewCanonicalHasher(store.CanonicalCRC32C)
+	err := s.ring.RunDigest(s.merger, p, h)
 	if err != nil {
 		s.ring.SetEnd(s.ring.WriteIndex())
 	}
-	// RunPaced never closes the merger; its caller owns it.
+	// RunDigest never closes the merger; its caller owns it.
 	if cerr := s.merger.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
 	// The manifest records a failed run too: "this run aborted here" is
 	// exactly what a catalogue needs.
-	if merr := s.writeRunManifest(err); merr != nil && err == nil {
+	if merr := s.writeRunManifest(err, h); merr != nil && err == nil {
 		err = merr
 	}
 	s.runErr = err
@@ -506,7 +510,7 @@ func (s *Server) run(p *fanout.Pacer) {
 // writeRunManifest writes the run manifest, if one was configured. It
 // runs on the emit goroutine once the stream has ended, which is the
 // one moment "as observed at run end" actually names.
-func (s *Server) writeRunManifest(runErr error) error {
+func (s *Server) writeRunManifest(runErr error, h *store.CanonicalHasher) error {
 	if s.cfg.ManifestPath == "" {
 		return nil
 	}
@@ -543,6 +547,8 @@ func (s *Server) writeRunManifest(runErr error) error {
 	}
 	if runErr != nil {
 		m.Result.Error = runErr.Error()
+	} else {
+		m.Result.CanonicalHash = hex.EncodeToString(h.Sum(nil))
 	}
 	return writeManifest(s.cfg.ManifestPath, m)
 }

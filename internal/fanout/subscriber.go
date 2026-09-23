@@ -125,8 +125,8 @@ func (s *Subscriber) Cancel() { s.canceled.Store(true) }
 // Subscribe registers a new subscriber against r, starting at the
 // position start names, with the given backpressure mode. Before
 // StartEmitting has been called, it resolves the starting position and
-// returns immediately — the common case (see docs/backpressure.md, Q4)
-// of a subscriber set fixed before the first event. Once r is being
+// returns immediately — the common case (see docs/backpressure.md) of a
+// subscriber set fixed before the first event. Once r is being
 // actively emitted, the request is queued and resolved by the emit
 // goroutine between records instead, so a joining goroutine never
 // mutates the subscriber set while the emit goroutine might be

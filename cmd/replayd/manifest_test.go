@@ -118,6 +118,34 @@ func TestRunManifest(t *testing.T) {
 		}
 	})
 
+	t.Run("a_finished_runs_hash_is_the_merged_streams_own_hash", func(t *testing.T) {
+		dir := t.TempDir()
+		ds := synth.Standard(t, dir)
+		cfg := testConfig(t, ds)
+		cfg.ManifestPath = filepath.Join(dir, "run.json")
+		// The same ground truth TestIntegrationGRPCHashMatchesInProcess
+		// checks its gRPC client against. Both now derive from the same
+		// canonical projection, so the manifest and the wire must agree.
+		wantHash, wantCount := inProcessHash(t, cfg)
+		srv := newTestServer(t, cfg)
+
+		if err := srv.Subscribe(blockRequest(), newFakeStream(t)); err != nil {
+			t.Fatalf("Subscribe() error = %v, want nil", err)
+		}
+		m := readManifest(t, srv, cfg.ManifestPath)
+
+		if m.Result.CanonicalHash == "" {
+			t.Fatal("manifest canonical_hash is empty; a run that completed has one")
+		}
+		if m.Result.CanonicalHash != wantHash {
+			t.Errorf("manifest canonical_hash = %s, want %s (the merged stream's own hash)",
+				m.Result.CanonicalHash, wantHash)
+		}
+		if got := m.Result.EmitIndexAtEnd; got != uint64(wantCount) {
+			t.Errorf("manifest emit index at end = %d, want %d", got, wantCount)
+		}
+	})
+
 	t.Run("a_run_with_no_manifest_path_writes_nothing", func(t *testing.T) {
 		dir := t.TempDir()
 		ds := synth.Standard(t, dir)

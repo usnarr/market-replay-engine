@@ -92,17 +92,10 @@ type RunResult struct {
 	// the Block barrier.
 	PacingSlipNanos int64 `json:"pacing_slip_nanos"`
 
-	// CanonicalHash is empty in this milestone, and the field is here
-	// as the hook for it rather than as a promise. Nothing in the emit
-	// loop hands the merged stream out: RunPaced drains the merger into
-	// the ring itself, and the only way to see every record from
-	// outside is a Block subscriber, which would throttle the whole run
-	// to the speed of a hash nobody asked for. Filling this in needs
-	// internal/fanout to offer the digest itself, as a run-level
-	// option, so a run that does not want it pays nothing. The gRPC
-	// integration test computes the same digest client-side today, so
-	// the projection is already pinned; what is missing is only a way
-	// for a real run to produce it for free.
+	// CanonicalHash is the run's canonical_v1 digest, hex encoded, as
+	// fanout.Ring.RunDigest computed it over every record the emit loop
+	// wrote. It is empty for a run that aborted: an aborted run has no
+	// valid prefix, so a partial digest would describe nothing.
 	CanonicalHash string `json:"canonical_hash"`
 
 	// Error is the run's own failure, if it had one, as text. A
