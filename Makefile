@@ -56,27 +56,11 @@ determinism:
 # runs, so a missing dot costs the profiles nothing: install Graphviz and
 # re-run.
 #
-# The benchmark run's own exit status is deliberately not checked, and the
-# profile file's existence is checked instead. -cpuprofile makes the
-# allocation gate report a false positive: internal/allocgate's byte pass
-# reads process-wide runtime.MemStats.TotalAlloc (its own doc comment
-# names this exposure), and the CPU profiler's sampling goroutine
-# allocates inside the window that pass measures. Measured here: every
-# -cpuprofile run of ./internal/fanout/... fails BenchmarkRingWrite/no_blob
-# with 24 to 64 bytes over 200 runs, while the same run with -memprofile
-# alone passes every time. It is the same class of false positive as
-# -race, which allocgate skips outright.
-#
-# The consequence to know about when reading a committed CPU profile: a
-# gated sub-benchmark aborts at its AssertZero call, so its own timing
-# loop contributes no samples. The function under it is still profiled
-# through its ungated siblings -- Ring.Write through
-# BenchmarkRingWrite/with_a_snapshot_blob, for instance.
-#
-# The allocation gate belongs to make bench, which never passes a
-# profiling flag, so nothing here weakens it. A compile error or a panic
-# still leaves no profile, and the test -s check below still fails the
-# target for it.
+# -cpuprofile's own sampling goroutine used to make internal/allocgate's
+# byte pass report a false allocation, since that pass reads process-wide
+# runtime.MemStats.TotalAlloc. AssertZero now skips its own check under
+# -cpuprofile instead of failing (see its doc comment), so this target
+# checks the benchmark run's exit status normally, the same as make bench.
 #
 # go test also leaves the compiled test binary (<pkg>.test, .exe on
 # Windows) in the repo root when a profiling flag is set -- pprof's own
@@ -89,9 +73,8 @@ profile:
 	sha=$$(git rev-parse --short HEAD); \
 	for pkg in $(PROFILE_PKGS); do \
 		name=$$(basename $$pkg); \
-		go test -run=^$$ -bench=. -cpuprofile=profiles/$$name-cpu.prof -memprofile=profiles/$$name-mem.prof ./$$pkg/... || true; \
+		go test -run=^$$ -bench=. -cpuprofile=profiles/$$name-cpu.prof -memprofile=profiles/$$name-mem.prof ./$$pkg/... || exit 1; \
 		for kind in cpu mem; do \
-			test -s profiles/$$name-$$kind.prof || { echo "profile: $$pkg wrote no $$kind profile"; exit 1; }; \
 			go tool pprof -svg profiles/$$name-$$kind.prof > profiles/$$name-$$kind-$$sha.svg || exit 1; \
 		done; \
 	done
