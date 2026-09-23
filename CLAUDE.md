@@ -41,7 +41,7 @@ internal/
   synth/               # synthetic dataset generator, shared by the determinism suites
 bench/                 # load harness, reproducible make targets
 docs/                  # concept and reference docs, indexed by docs/CLAUDE.md
-profiles/              # committed pprof SVGs, one per version
+profiles/              # local .prof files only, never committed -- see BENCHMARKS.md
 testdata/
 ```
 

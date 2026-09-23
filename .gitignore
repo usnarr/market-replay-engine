@@ -14,6 +14,13 @@ testdata/large/
 *.test
 *.test.exe
 
+# go tool pprof -svg's own rendered output embeds the local machine's
+# temp-build path in its Build ID line -- not a source-path issue
+# -trimpath would fix, since it names where the binary was compiled,
+# not where its source lives. Never commit one. See BENCHMARKS.md and
+# the profile target in the Makefile.
+profiles/*.svg
+
 # go build ./... with no -o writes a binary named after the package
 # directory into cwd. One entry per cmd/ binary, plus its Windows form.
 /cmd/replayd/replayd

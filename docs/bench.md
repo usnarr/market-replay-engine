@@ -74,7 +74,7 @@ The rule applies to this project's own development, not only to a future contrib
 
 A change that is required functionality rather than speculative tuning does not need the profile half — it was going to be built either way — but it still takes the measurement half. `BENCHMARKS.md`'s release-batching row is an example, and says so in place.
 
-`make profile` writes a CPU and a memory profile per hot-path package and generates one committed SVG per profile, named with the commit hash it was taken at. The SVG is the durable, reviewable artifact; the raw `.prof` is a regenerable intermediate and stays gitignored. Generating the SVG needs Graphviz's `dot` on `PATH`.
+`make profile` writes a CPU and a memory profile per hot-path package. Nothing under `profiles/` is committed: `go tool pprof -svg`'s own rendered output includes a "Build ID" line naming the compiled test binary's path under the local machine's temp directory, which runs through the invoking user's own home directory by construction — not a source-path leak `-trimpath` reaches, since it names where the binary was built, not where its source lives. Read a `.prof` locally with `go tool pprof` instead of publishing a rendering of it.
 
 ## `BENCHMARKS.md` is a deliverable, not documentation
 
